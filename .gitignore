@@ -1,3 +1,24 @@
-/nspulse
-nspulse
-/out/
+# Build output directory
+out/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+
+# Dependency directories
+vendor/
+
+# Go workspace file
+go.work
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
