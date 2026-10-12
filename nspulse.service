@@ -1,6 +1,6 @@
 [Unit]
 Description=NSPulse DNS performance monitor and switcher
-Documentation=https://github.com/shaun/nspulse
+Documentation=https://github.com/sjclayton/nspulse
 After=network-online.target systemd-resolved.service
 Wants=network-online.target
 
