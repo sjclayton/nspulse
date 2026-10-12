@@ -1,5 +1,6 @@
 // Package discover finds the active (default-route) interface, the DHCP
-// DNS server set for it, and the current resolved ordering.
+// DNS server set for it, and resolved's per-link DNS state (configured
+// order plus the server actually in use).
 package discover
 
 import (
@@ -100,27 +101,42 @@ func pickDefault(routes []defRoute) (string, error) {
 	return best, nil
 }
 
-// OrderedServers returns the current per-link DNS server order for iface as
-// known to systemd-resolved (via resolvectl status). Position 0 is primary;
-// order is preserved exactly.
-func OrderedServers(iface string) ([]string, error) {
-	out, err := exec.Command("resolvectl", "--no-pager", "status", iface).Output()
-	if err != nil {
-		return nil, fmt.Errorf("resolvectl status %s: %w", iface, err)
-	}
-	return parseStatusOrder(string(out))
+// LinkDNS is systemd-resolved's per-link DNS state: the configured server
+// order plus the server actually in use.
+type LinkDNS struct {
+	Servers []string // configured "DNS Servers:" order, as listed
+	Current string   // in-use "Current DNS Server:"; "" if resolved reports none
 }
 
-// parseStatusOrder extracts the "DNS Servers:" list (plus any wrapped
-// continuation lines of bare IPs) from resolvectl status output, preserving
-// order. Note "Current DNS Server:" (singular) is deliberately not matched.
-func parseStatusOrder(output string) ([]string, error) {
-	var servers []string
+// LinkStatus returns resolved's per-link DNS state for iface via
+// resolvectl status. Servers keeps the configured order; Current is the
+// server actually handling queries, which can differ from Servers[0]
+// (e.g. after a failure or an external reorder).
+func LinkStatus(iface string) (LinkDNS, error) {
+	out, err := exec.Command("resolvectl", "--no-pager", "status", iface).Output()
+	if err != nil {
+		return LinkDNS{}, fmt.Errorf("resolvectl status %s: %w", iface, err)
+	}
+	return parseLinkStatus(string(out))
+}
+
+// parseLinkStatus extracts the "DNS Servers:" list (plus any wrapped
+// continuation lines of bare IPs) and the "Current DNS Server:" value from
+// resolvectl status output, preserving order. Note the singular
+// "Current DNS Server:" must not be mistaken for the plural list header.
+func parseLinkStatus(output string) (LinkDNS, error) {
+	var link LinkDNS
 	collecting := false
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if rest, ok := strings.CutPrefix(trimmed, "Current DNS Server:"); ok {
+			if ips := filterIPs(strings.Fields(rest)); len(ips) > 0 {
+				link.Current = ips[0]
+			}
+			continue
+		}
 		if rest, ok := strings.CutPrefix(trimmed, "DNS Servers:"); ok {
-			servers = append(servers, filterIPs(strings.Fields(rest))...)
+			link.Servers = append(link.Servers, filterIPs(strings.Fields(rest))...)
 			collecting = true
 			continue
 		}
@@ -129,16 +145,17 @@ func parseStatusOrder(output string) ([]string, error) {
 			// All-IP continuation line (e.g. wrapped "DNS Servers:")?
 			// filterIPs also strips "#suffix" annotations.
 			if ips := filterIPs(fields); len(fields) > 0 && len(ips) == len(fields) {
-				servers = append(servers, ips...)
+				link.Servers = append(link.Servers, ips...)
 				continue
 			}
 			collecting = false
 		}
 	}
-	if len(servers) == 0 {
-		return nil, fmt.Errorf("no DNS servers listed")
+	if len(link.Servers) == 0 {
+		return LinkDNS{}, fmt.Errorf("no DNS servers listed")
 	}
-	return dedupeKeepOrder(servers), nil
+	link.Servers = dedupeKeepOrder(link.Servers)
+	return link, nil
 }
 
 // DHCPServers returns the DHCP-provided DNS server set for iface. It tries
@@ -240,14 +257,6 @@ func fromDHClientLeases(iface string) ([]string, error) {
 	return dedupe(servers), nil
 }
 
-func splitIPs(s string) ([]string, error) {
-	servers := filterIPs(strings.Fields(s))
-	if len(servers) == 0 {
-		return nil, fmt.Errorf("no parseable IPs in %q", s)
-	}
-	return dedupeKeepOrder(servers), nil
-}
-
 // filterIPs keeps valid IPs, stripping resolvectl "#suffix" annotations
 // (e.g. "2001:db8::1#dns.example") before validating.
 func filterIPs(in []string) []string {
@@ -278,7 +287,7 @@ func dedupe(in []string) []string {
 }
 
 // dedupeKeepOrder dedupes while preserving first-seen order. Use for
-// resolved's server list, where position 0 is the primary.
+// resolved's configured server list, whose order is significant.
 func dedupeKeepOrder(in []string) []string {
 	seen := map[string]bool{}
 	var out []string

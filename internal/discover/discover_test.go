@@ -6,23 +6,46 @@ import (
 	"testing"
 )
 
-// Regression: resolved lists 192.168.1.20 first; order must survive intact.
-func TestParseStatusOrderPreservesPrimary(t *testing.T) {
+// Regression: primary is Current DNS Server, not list position 0.
+func TestParseLinkStatusPrimaryIsCurrentServer(t *testing.T) {
 	out := `Link 2 (eno1)
     Current Scopes: DNS LLMNR/IPv4 LLMNR/IPv6 mDNS/IPv4 mDNS/IPv6
          Protocols: +DefaultRoute +LLMNR +mDNS -DNSOverTLS DNSSEC=no/unsupported
+Current DNS Server: 192.168.1.20
+       DNS Servers: 192.168.1.10 192.168.1.20
+        DNS Domain: clayton-tech.ca
+     Default Route: yes
+`
+	link, err := parseLinkStatus(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link.Current != "192.168.1.20" {
+		t.Fatalf("got current %q, want 192.168.1.20", link.Current)
+	}
+	want := []string{"192.168.1.10", "192.168.1.20"}
+	if !reflect.DeepEqual(link.Servers, want) {
+		t.Fatalf("got servers %v, want %v", link.Servers, want)
+	}
+}
+
+func TestParseLinkStatusOrderPreserved(t *testing.T) {
+	out := `Link 2 (eno1)
 Current DNS Server: 192.168.1.20
        DNS Servers: 192.168.1.20 192.168.1.10
         DNS Domain: clayton-tech.ca
      Default Route: yes
 `
-	got, err := parseStatusOrder(out)
+	link, err := parseLinkStatus(out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"192.168.1.20", "192.168.1.10"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
+	if !reflect.DeepEqual(link.Servers, want) {
+		t.Fatalf("got %v, want %v", link.Servers, want)
+	}
+	if link.Current != "192.168.1.20" {
+		t.Fatalf("got current %q, want 192.168.1.20", link.Current)
 	}
 }
 
@@ -32,18 +55,21 @@ func TestParseStatusOrderWrappedLines(t *testing.T) {
                     192.168.1.30
         DNS Domain: example.com
 `
-	got, err := parseStatusOrder(out)
+	link, err := parseLinkStatus(out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"192.168.1.20", "192.168.1.10", "192.168.1.30"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
+	if !reflect.DeepEqual(link.Servers, want) {
+		t.Fatalf("got %v, want %v", link.Servers, want)
+	}
+	if link.Current != "" {
+		t.Fatalf("got current %q, want empty", link.Current)
 	}
 }
 
 func TestParseStatusOrderMissing(t *testing.T) {
-	if _, err := parseStatusOrder("Link 3 (wlan0)\n     Default Route: no\n"); err == nil {
+	if _, err := parseLinkStatus("Link 3 (wlan0)\n     Default Route: no\n"); err == nil {
 		t.Fatal("want error for link with no DNS Servers line")
 	}
 }
@@ -125,12 +151,15 @@ Current DNS Server: 2001:db8::1
                     2001:db8::2#dns.example
      Default Route: yes
 `
-	got, err := parseStatusOrder(out)
+	link, err := parseLinkStatus(out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"2001:db8::1", "192.168.1.20", "2001:db8::2"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v, want %v", got, want)
+	if !reflect.DeepEqual(link.Servers, want) {
+		t.Fatalf("got %v, want %v", link.Servers, want)
+	}
+	if link.Current != "2001:db8::1" {
+		t.Fatalf("got current %q, want 2001:db8::1", link.Current)
 	}
 }
