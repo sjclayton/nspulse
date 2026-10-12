@@ -1,13 +1,13 @@
 # NSPulse
 
-Monitoring/measurement/switching daemon that keeps the fastest DNS server set as the primary on a Linux machine managed by `systemd-resolved`.
+Daemon that measures DNS server response times and keeps the fastest server first on a Linux machine managed by `systemd-resolved`.
 
 ## How it works
 
-1. **Discover** the active interface (lowest-metric default route across both `/proc/net/route` and `/proc/net/ipv6_route`, IPv4 and IPv6 compared on equal footing) on every round. Works on IPv6-only hosts. If the interface changes mid-hour, the hour resets.
-2. **DNS set from DHCP** (`nmcli dev show`, then systemd-networkd leases, then dhclient leases); **order from resolved** (`resolvectl status`). Only the intersection is measured — NSPulse never invents servers. If DHCP discovery fails entirely, it falls back to resolved's set so a statically-configured server is still measured. If the server set changes (e.g. DHCP renewal), the hour resets.
-3. **Measure** every 5 minutes (default): 4 direct A queries per server per round, cycling the `--domains` list (`google.com`, `cloudflare.com`, …), 2s per-query timeout. Real DNS RTT over UDP to port 53 — not ping — bypassing the resolved cache. Any answered query counts, even NXDOMAIN/SERVFAIL: the server responded, and response time is what's measured. A fully-timed-out round marks the server down for that round.
-4. **Decide** after 1 hour (12 rounds at defaults): lowest hourly **median** wins; medians within 0.05 ms are treated as tied and the lowest p95 wins. An exact tie (median and p95 equal) keeps the incumbent — no evidence to switch on. A challenger dethrones the incumbent only if its median beats the incumbent's by _more than_ `--margin` (default 10%), guarding against flapping. A fully-down incumbent always loses to any healthy challenger; if every server is down for the whole hour, nothing switches.
+1. **Discover** the active interface on every round: the lowest-metric default route, checking both `/proc/net/route` (IPv4) and `/proc/net/ipv6_route` (IPv6) and comparing by metric. Works on IPv6-only hosts. If the interface changes mid-hour, the hour resets.
+2. **DNS set from DHCP** (`nmcli dev show`, then systemd-networkd leases, then dhclient leases); **order from resolved** (`resolvectl status`). Only servers present in both lists are measured. NSPulse never adds servers of its own. If DHCP discovery fails entirely, it falls back to resolved's set so a statically-configured server is still measured. If the server set changes (e.g. DHCP renewal), the hour resets.
+3. **Measure** every 5 minutes (default): 4 direct A queries per server per round, cycling the `--domains` list such as `google.com` and `cloudflare.com`, 2s per-query timeout. Measures real DNS response time over UDP port 53 (not ping), querying each server directly and bypassing the resolved cache. Any reply counts, including NXDOMAIN/SERVFAIL. The server answered, so its response time is recorded. A fully-timed-out round marks the server down for that round.
+4. **Decide** after 1 hour (12 rounds at defaults): lowest hourly **median** wins; medians within 0.05 ms are treated as tied and the lowest p95 wins. An exact tie (median and p95 equal) keeps the incumbent. There is no evidence favoring a switch. A challenger dethrones the incumbent only if its median beats the incumbent's by a margin larger than `--margin` (default 10%), to avoid switching back and forth between servers of similar speed. A fully-down incumbent always loses to any healthy challenger; if every server is down for the whole hour, nothing switches.
 5. **Switch** with `resolvectl dns <iface> <candidate first, rest in original order>`. No-op if the candidate is already primary. If the new primary is down, resolved falls back to the other server on its own. Only the `daemon` command switches; `status`/`watch` are read-only socket clients.
 
 State is in memory only, served on a Unix socket (default `/run/nspulse.sock`, mode 0666 so unprivileged `status`/`watch` work). A daemon restart starts a fresh hour.
@@ -71,7 +71,7 @@ nspulse status --json          # raw JSON (same payload the daemon serves)
 nspulse watch                  # live view, refreshes every 5s (see --every)
 ```
 
-Example `status` (mid-hour, incumbent `.20` still winning — no switch):
+Example `status` (mid-hour, incumbent `.20` still winning, no switch):
 
 ```
 nspulse  iface=eno1  round 2/12 (every 5m0s)  at 01:39:07
@@ -82,7 +82,7 @@ server        n  fail  median     p95  last-round  dhcp?
 probable candidate: 192.168.1.20  (no switch needed)
 ```
 
-`*` marks the current primary. `fail` counts queries that produced no usable reply this hour (timeouts, dial/write failures). `last-round` shows `down` when a server answered nothing in the latest round. `dhcp?` confirms each listed server is in the DHCP set — servers in the resolved order but absent from DHCP are excluded from measuring entirely. When the challenger beats the margin, the candidate line reads `-> WOULD SWITCH from <primary> (margin beaten)`.
+`*` marks the current primary. `fail` counts queries that produced no usable reply this hour (timeouts, dial/write failures). `last-round` shows `down` when a server answered nothing in the latest round. `dhcp?` confirms each listed server is in the DHCP set. Servers in the resolved order but absent from DHCP are excluded from measuring entirely. When the challenger beats the margin, the candidate line reads `-> WOULD SWITCH from <primary> (margin beaten)`.
 
 ## Install as a service
 
