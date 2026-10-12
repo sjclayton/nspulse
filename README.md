@@ -82,7 +82,7 @@ server        n  fail  median     p95  last-round  dhcp?
 probable candidate: 192.168.1.20  (no switch needed)
 ```
 
-`*` marks the server actually in use (`Current DNS Server` in `resolvectl status`), which can sit elsewhere than first in the configured order. `fail` counts queries that produced no usable reply this hour (timeouts, dial/write failures). `last-round` shows `down` when a server answered nothing in the latest round. `dhcp?` confirms each listed server is in the DHCP set. Servers in the resolved order but absent from DHCP are excluded from measuring entirely. When the challenger beats the margin, the candidate line reads `-> WOULD SWITCH from <primary> (margin beaten)`.
+`*` marks the server actually in use (`Current DNS Server` in `resolvectl status`), which can sit elsewhere than first in the configured order. `at` is the time the last measurement round completed, before round 1 it reads `(no rounds yet)`. `fail` counts queries that produced no usable reply this hour (timeouts, dial/write failures). `last-round` shows `down` when a server answered nothing in the latest round. `dhcp?` confirms each listed server is in the DHCP set. Servers in the resolved order but absent from DHCP are excluded from measuring entirely. When the challenger beats the margin, the candidate line reads `-> WOULD SWITCH from <primary> (margin beaten)`.
 
 ## Install as a service
 

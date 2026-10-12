@@ -55,10 +55,19 @@ func Watch(args []string) error {
 	}
 }
 
+// headerLine prints round progress plus when the round completed (not when
+// status was fetched). Before round 1 there is no measurement yet.
+func headerLine(st ipc.Status) string {
+	at := "(no rounds yet)"
+	if !st.Time.IsZero() {
+		at = "at " + st.Time.Format("15:04:05")
+	}
+	return fmt.Sprintf("nspulse  iface=%s  round %d/%d (every %s)  %s",
+		nonempty(st.Iface, "?"), st.Round, st.RoundsPerHour, st.Interval, at)
+}
+
 func printStatus(st ipc.Status) {
-	fmt.Printf("nspulse  iface=%s  round %d/%d (every %s)  at %s\n",
-		nonempty(st.Iface, "?"), st.Round, st.RoundsPerHour, st.Interval,
-		st.Time.Format("15:04:05"))
+	fmt.Printf("%s\n", headerLine(st))
 	fmt.Printf("order:   %s\n", strings.Join(markPrimary(st), "  "))
 	for _, line := range tableLines(st) {
 		fmt.Println(line)

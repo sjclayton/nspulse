@@ -21,7 +21,9 @@ type ServerStats struct {
 }
 
 // Status is the full snapshot served by the daemon. Only the daemon writes;
-// status/watch only read.
+// status/watch only read. Time is when the last measurement round
+// completed (zero before round 1), so status shows round time, not
+// fetch time.
 type Status struct {
 	Time              time.Time              `json:"time"`
 	Iface             string                 `json:"iface"`

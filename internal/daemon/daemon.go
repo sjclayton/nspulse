@@ -36,20 +36,21 @@ type Config struct {
 // state is the in-memory measurement hour. Nothing is persisted; a restart
 // starts a fresh hour.
 type state struct {
-	mu        sync.RWMutex
-	iface     string
-	servers   []string // configured resolved order (for switching)
-	primary   string   // server actually in use ("Current DNS Server")
-	measured  []string // last round's measured set (DHCP ∩ resolved order)
-	dhcp      []string
-	confirmed map[string]bool
-	samples   map[string][]float64
-	roundMeds map[string]float64
-	roundOK   map[string]bool
-	round     int
-	lastSw    string
-	lastErr   string
-	cfg       Config
+	mu         sync.RWMutex
+	iface      string
+	servers    []string // configured resolved order (for switching)
+	primary    string   // server actually in use ("Current DNS Server")
+	measured   []string // last round's measured set (DHCP ∩ resolved order)
+	dhcp       []string
+	confirmed  map[string]bool
+	samples    map[string][]float64
+	roundMeds  map[string]float64
+	roundOK    map[string]bool
+	round      int
+	measuredAt time.Time // when the last round completed; zero before round 1
+	lastSw     string
+	lastErr    string
+	cfg        Config
 }
 
 // Run parses flags and blocks until SIGINT/SIGTERM.
@@ -66,6 +67,12 @@ func Run(args []string) error {
 	dryRun := fs.Bool("dry-run", false, "log switching decisions without calling resolvectl")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	// The systemd journal already timestamps; Go's own date/time prefix
+	// is redundant there (JOURNAL_STREAM set), so drop it. Elsewhere the
+	// prefix stays on. No flag: behavior follows the runtime.
+	if os.Getenv("JOURNAL_STREAM") != "" {
+		log.SetFlags(0)
 	}
 
 	roundsPerHour := int((*window) / (*interval))
@@ -189,6 +196,7 @@ func (st *state) tick(roundsPerHour int) {
 		}
 	}
 	st.round++
+	st.measuredAt = time.Now()
 	st.lastErr = ""
 	if st.round >= roundsPerHour {
 		st.mu.Unlock()
@@ -254,6 +262,7 @@ func (st *state) decide(roundsPerHour int) {
 		st.primary = candidate
 	}
 	st.round = 0
+	st.measuredAt = time.Time{}
 	st.samples = map[string][]float64{}
 }
 
@@ -279,7 +288,7 @@ func (st *state) snapshot() ipc.Status {
 	}
 	candidate, wouldSwitch := rank.Decide(st.samples, incumbent, st.cfg.Margin)
 	return ipc.Status{
-		Time: time.Now(), Iface: st.iface, Servers: st.servers,
+		Time: st.measuredAt, Iface: st.iface, Servers: st.servers,
 		Primary: incumbent, DHCPConfirmed: st.confirmed,
 		Round: st.round, RoundsPerHour: int(st.cfg.Window / st.cfg.Interval),
 		Interval: st.cfg.Interval.String(), PerServer: per,
@@ -298,6 +307,7 @@ func (st *state) setErr(msg string) {
 func (st *state) reset() {
 	st.mu.Lock()
 	st.round = 0
+	st.measuredAt = time.Time{}
 	st.samples = map[string][]float64{}
 	st.mu.Unlock()
 }

@@ -3,9 +3,26 @@ package cli
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/shaun/nspulse/internal/ipc"
 )
+
+// The header shows the round's completion time, not fetch time, and says
+// so explicitly before round 1.
+func TestHeaderLineShowsRoundTime(t *testing.T) {
+	roundAt := time.Date(2026, 10, 12, 1, 39, 7, 0, time.UTC)
+	got := headerLine(ipc.Status{Iface: "eno1", Round: 2, RoundsPerHour: 12, Interval: "5m0s", Time: roundAt})
+	want := "nspulse  iface=eno1  round 2/12 (every 5m0s)  at 01:39:07"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	got = headerLine(ipc.Status{Iface: "eno1", Round: 0, RoundsPerHour: 12, Interval: "5m0s"})
+	want = "nspulse  iface=eno1  round 0/12 (every 5m0s)  (no rounds yet)"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
 
 // fieldSpans returns (start, end) offsets of each whitespace-separated field.
 func fieldSpans(s string) [][2]int {
