@@ -1,0 +1,17 @@
+[Unit]
+Description=NSPulse DNS performance monitor and switcher
+Documentation=https://github.com/shaun/nspulse
+After=network-online.target systemd-resolved.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/nspulse daemon
+Restart=on-failure
+RestartSec=10
+# Needs root for `resolvectl dns <iface>`.
+# Socket (/run/nspulse.sock by default) is chmodded 0666 by the daemon so
+# unprivileged `nspulse status` / `nspulse watch` clients can connect.
+
+[Install]
+WantedBy=multi-user.target
