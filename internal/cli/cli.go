@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/shaun/nspulse/internal/ipc"
+	"github.com/sjclayton/nspulse/internal/ipc"
 )
 
 // Status prints one snapshot: current hour details + probable candidate.

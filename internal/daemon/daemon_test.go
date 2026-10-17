@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shaun/nspulse/internal/discover"
+	"github.com/sjclayton/nspulse/internal/discover"
 )
 
 func TestPrimaryOfPrefersInUseServer(t *testing.T) {

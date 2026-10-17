@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/shaun/nspulse/internal/cli"
-	"github.com/shaun/nspulse/internal/daemon"
+	"github.com/sjclayton/nspulse/internal/cli"
+	"github.com/sjclayton/nspulse/internal/daemon"
 )
 
 func main() {

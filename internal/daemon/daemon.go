@@ -13,11 +13,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/shaun/nspulse/internal/discover"
-	"github.com/shaun/nspulse/internal/ipc"
-	"github.com/shaun/nspulse/internal/measure"
-	"github.com/shaun/nspulse/internal/rank"
-	"github.com/shaun/nspulse/internal/resolved"
+	"github.com/sjclayton/nspulse/internal/discover"
+	"github.com/sjclayton/nspulse/internal/ipc"
+	"github.com/sjclayton/nspulse/internal/measure"
+	"github.com/sjclayton/nspulse/internal/rank"
+	"github.com/sjclayton/nspulse/internal/resolved"
 )
 
 // Config holds daemon flags; there is deliberately no config file.

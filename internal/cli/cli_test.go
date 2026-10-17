@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/shaun/nspulse/internal/ipc"
+	"github.com/sjclayton/nspulse/internal/ipc"
 )
 
 // The header shows the round's completion time, not fetch time, and says
