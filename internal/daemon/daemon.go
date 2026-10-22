@@ -3,6 +3,7 @@
 package daemon
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -75,6 +76,9 @@ func Run(args []string) error {
 		log.SetFlags(0)
 	}
 
+	if err := validateFlags(*interval, *window, *timeout, *margin); err != nil {
+		return err
+	}
 	roundsPerHour := int((*window) / (*interval))
 	if roundsPerHour < 2 {
 		return fmt.Errorf("window/interval gives %d rounds/hour, need >= 2", roundsPerHour)
@@ -93,6 +97,14 @@ func Run(args []string) error {
 		Iface: *iface, Margin: *margin, DryRun: *dryRun,
 	}
 	st := &state{cfg: cfg, samples: map[string][]float64{}, roundMeds: map[string]float64{}, roundOK: map[string]bool{}}
+
+	// One daemon per host, whatever --socket was given. A second instance
+	// exits before it can measure or write DNS order.
+	lock, err := acquireLock(instanceLockPath)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
 
 	go func() {
 		if err := ipc.Serve(cfg.Socket, st.snapshot); err != nil {
@@ -257,7 +269,7 @@ func (st *state) decide(roundsPerHour int) {
 	} else if err := resolved.SetOrder(iface, servers, candidate); err != nil {
 		st.lastErr = err.Error()
 		log.Printf("nspulse: switch failed: %v", err)
-	} else if link, err := discover.LinkStatus(iface); err != nil || link.Current != candidate {
+	} else if link, err := discover.LinkStatus(iface); err != nil || discover.ServerKey(link.Current) != discover.ServerKey(candidate) {
 		// Full list is restored either way; resolved just did not adopt
 		// the candidate. Keep reporting the server it actually uses.
 		current := link.Current
@@ -350,12 +362,15 @@ func copySamples(in map[string][]float64) map[string][]float64 {
 
 // incumbentOf resolves the server actually in use. It trusts resolved's
 // Current DNS Server when present in the configured list; otherwise (stale
-// or empty report) it falls back to the head of the configured order.
+// or empty report) it falls back to the head of the configured order. The
+// returned entry keeps its raw #server-name/%zone form, since that is what
+// gets written back.
 func incumbentOf(link discover.LinkDNS, ordered []string) string {
 	if link.Current != "" {
+		cur := discover.ServerKey(link.Current)
 		for _, s := range ordered {
-			if s == link.Current {
-				return link.Current
+			if discover.ServerKey(s) == cur {
+				return s
 			}
 		}
 	}
@@ -365,15 +380,17 @@ func incumbentOf(link discover.LinkDNS, ordered []string) string {
 	return ""
 }
 
-// intersectKeepOrder returns ordered filtered to members of set.
+// intersectKeepOrder returns ordered filtered to members of set, matching
+// bare addresses so a DHCP entry (plain IP) matches a resolved entry that
+// carries a #server-name or %zone.
 func intersectKeepOrder(ordered, set []string) []string {
 	in := map[string]bool{}
 	for _, s := range set {
-		in[s] = true
+		in[discover.ServerKey(s)] = true
 	}
 	var out []string
 	for _, s := range ordered {
-		if in[s] {
+		if in[discover.ServerKey(s)] {
 			out = append(out, s)
 		}
 	}
@@ -398,4 +415,44 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// validateFlags rejects values that would panic (zero interval) or silently
+// break either measurement (zero timeout) or switching (margin outside
+// 0..1).
+func validateFlags(interval, window, timeout time.Duration, margin float64) error {
+	switch {
+	case interval <= 0:
+		return fmt.Errorf("interval must be > 0")
+	case window <= 0:
+		return fmt.Errorf("window must be > 0")
+	case timeout <= 0:
+		return fmt.Errorf("timeout must be > 0")
+	case margin < 0 || margin >= 1:
+		return fmt.Errorf("margin must be >= 0 and < 1")
+	}
+	return nil
+}
+
+// instanceLockPath is fixed rather than derived from --socket: every daemon
+// on the host competes for the same lock, so a second one cannot run
+// alongside the first even with a different socket path.
+const instanceLockPath = "/run/nspulse.lock"
+
+// acquireLock takes an exclusive, non-blocking flock and holds it for the
+// process lifetime. The file itself is left in place; the kernel releases
+// the lock when the process exits, so a crash never leaves it stuck.
+func acquireLock(path string) (*os.File, error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open instance lock %s: %w", path, err)
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another instance is already running")
+		}
+		return nil, fmt.Errorf("lock %s: %w", path, err)
+	}
+	return f, nil
 }

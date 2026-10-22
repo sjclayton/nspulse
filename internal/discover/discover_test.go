@@ -1,6 +1,8 @@
 package discover
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -155,11 +157,73 @@ Current DNS Server: 2001:db8::1
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"2001:db8::1", "192.168.1.20", "2001:db8::2"}
+	want := []string{"2001:db8::1", "192.168.1.20", "2001:db8::2#dns.example"}
 	if !reflect.DeepEqual(link.Servers, want) {
 		t.Fatalf("got %v, want %v", link.Servers, want)
 	}
 	if link.Current != "2001:db8::1" {
 		t.Fatalf("got current %q, want 2001:db8::1", link.Current)
+	}
+}
+
+// resolvectl accepts "%zone" and "#server-name" suffixes. Both must survive
+// parsing so switching writes the link config back unchanged.
+func TestParseStatusKeepsZonesAndAnnotations(t *testing.T) {
+	out := `Link 2 (eno1)
+Current DNS Server: fe80::1%eno1
+       DNS Servers: fe80::1%eno1 2001:db8::2#dns.example
+                    192.168.1.20#dot.example
+     Default Route: yes
+`
+	link, err := parseLinkStatus(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"fe80::1%eno1", "2001:db8::2#dns.example", "192.168.1.20#dot.example"}
+	if !reflect.DeepEqual(link.Servers, want) {
+		t.Fatalf("got %v, want %v", link.Servers, want)
+	}
+	if link.Current != "fe80::1%eno1" {
+		t.Fatalf("got current %q, want fe80::1%%eno1", link.Current)
+	}
+}
+
+// nmcli terse mode escapes ":" by default, which breaks IPv6 DNS values.
+// The -e no flag must be passed and both address families must parse.
+func TestFromNMCLIDisablesTerseEscaping(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+case "$*" in
+*"-e no"*) printf '%s\n' 'IP4.DNS[1]:192.168.1.10' 'IP6.DNS[1]:2001:db8::1' ;;
+*) printf '%s\n' 'IP4.DNS[1]:192.168.1.10' 'IP6.DNS[1]:2001\:db8\:\:1' ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := fromNMCLI("eno1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"192.168.1.10", "2001:db8::1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestServerKey(t *testing.T) {
+	cases := map[string]string{
+		"192.168.1.1":                     "192.168.1.1",
+		"192.168.1.1#dns.example":         "192.168.1.1",
+		"1.1.1.1:9953#dns.example":        "1.1.1.1",
+		"fe80::1%eno1":                    "fe80::1",
+		"[fe80::1%eno1]:9953#dns.example": "fe80::1",
+		"not-an-ip":                       "",
+	}
+	for in, want := range cases {
+		if got := ServerKey(in); got != want {
+			t.Errorf("ServerKey(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

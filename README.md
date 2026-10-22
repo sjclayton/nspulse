@@ -10,7 +10,9 @@ nspulse never adds or removes DNS servers. It only reorders servers that are alr
 
 Measurements live in memory for the current hour. Restarting the daemon, changing the active interface, or changing the server set starts a fresh hour.
 
-Only `nspulse daemon` changes DNS settings. `status` and `watch` read state and never switch anything.
+Only `nspulse daemon` changes DNS settings. `status` and `watch` read state and never switch anything. One daemon can run per host; a second exits with an error.
+
+Server entries keep their original form when reordered, including a `#server-name` (DoT) and an IPv6 `%zone`.
 
 ## Requirements
 

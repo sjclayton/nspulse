@@ -121,8 +121,10 @@ func LinkStatus(iface string) (LinkDNS, error) {
 }
 
 // parseLinkStatus extracts the "DNS Servers:" list (plus any wrapped
-// continuation lines of bare IPs) and the "Current DNS Server:" value from
-// resolvectl status output, preserving order. Note the singular
+// continuation lines) and the "Current DNS Server:" value from resolvectl
+// status output, preserving order and each entry as written. Entries may
+// carry a #server-name (DoT SNI) or %zone (link-local IPv6); both are kept
+// so switching can write the config back unchanged. Note the singular
 // "Current DNS Server:" must not be mistaken for the plural list header.
 func parseLinkStatus(output string) (LinkDNS, error) {
 	var link LinkDNS
@@ -130,21 +132,20 @@ func parseLinkStatus(output string) (LinkDNS, error) {
 	for _, line := range strings.Split(output, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if rest, ok := strings.CutPrefix(trimmed, "Current DNS Server:"); ok {
-			if ips := filterIPs(strings.Fields(rest)); len(ips) > 0 {
-				link.Current = ips[0]
+			if fields := strings.Fields(rest); len(fields) > 0 && validServer(fields[0]) {
+				link.Current = fields[0]
 			}
 			continue
 		}
 		if rest, ok := strings.CutPrefix(trimmed, "DNS Servers:"); ok {
-			link.Servers = append(link.Servers, filterIPs(strings.Fields(rest))...)
+			link.Servers = append(link.Servers, validServers(strings.Fields(rest))...)
 			collecting = true
 			continue
 		}
 		if collecting {
 			fields := strings.Fields(trimmed)
-			// All-IP continuation line (e.g. wrapped "DNS Servers:")?
-			// filterIPs also strips "#suffix" annotations.
-			if ips := filterIPs(fields); len(fields) > 0 && len(ips) == len(fields) {
+			// All-server continuation line (e.g. wrapped "DNS Servers:")?
+			if ips := validServers(fields); len(fields) > 0 && len(ips) == len(fields) {
 				link.Servers = append(link.Servers, ips...)
 				continue
 			}
@@ -156,6 +157,42 @@ func parseLinkStatus(output string) (LinkDNS, error) {
 	}
 	link.Servers = dedupeKeepOrder(link.Servers)
 	return link, nil
+}
+
+// ServerKey normalizes a resolvectl server entry for comparison by dropping
+// an optional port, %zone, and #server-name. It returns "" when the entry
+// holds no valid IP.
+func ServerKey(entry string) string {
+	addr := entry
+	if i := strings.IndexByte(addr, '#'); i >= 0 {
+		addr = addr[:i]
+	}
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		addr = host
+	}
+	if i := strings.IndexByte(addr, '%'); i >= 0 {
+		addr = addr[:i]
+	}
+	if net.ParseIP(addr) == nil {
+		return ""
+	}
+	return addr
+}
+
+// validServer reports whether entry is an IP, optionally with a %zone,
+// :port, and #server-name, as accepted by resolvectl dns.
+func validServer(entry string) bool {
+	return ServerKey(entry) != ""
+}
+
+func validServers(in []string) []string {
+	var out []string
+	for _, s := range in {
+		if validServer(s) {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // DHCPServers returns the DHCP-provided DNS server set for iface. It tries
@@ -171,9 +208,11 @@ func DHCPServers(iface string) ([]string, error) {
 	return fromDHClientLeases(iface)
 }
 
-// fromNMCLI reads IP4.DNS/IP6.DNS for iface via nmcli.
+// fromNMCLI reads IP4.DNS/IP6.DNS for iface via nmcli. Terse mode escapes
+// ":" inside values by default, which would turn an IPv6 server into
+// "2001\:db8\:\:1"; -e no keeps the addresses parseable.
 func fromNMCLI(iface string) ([]string, error) {
-	out, err := exec.Command("nmcli", "-t", "dev", "show", iface).Output()
+	out, err := exec.Command("nmcli", "-t", "-e", "no", "dev", "show", iface).Output()
 	if err != nil {
 		return nil, err
 	}

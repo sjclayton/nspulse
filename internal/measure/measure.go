@@ -64,10 +64,15 @@ func Probe(server, name string, timeout time.Duration) error {
 	return err
 }
 
-// serverAddr normalizes a server entry to host:port for dialing. Bare IPs
-// (v4 or v6) get port 53 via JoinHostPort, which handles IPv6 bracketing
-// ("2001:db8::1" -> "[2001:db8::1]:53"); host:port values pass through.
+// serverAddr normalizes a server entry to host:port for dialing. A
+// resolvectl "#server-name" suffix is not part of the address, so drop it.
+// Bare IPs (v4 or v6, including a %zone) get port 53 via JoinHostPort, which
+// handles IPv6 bracketing ("2001:db8::1" -> "[2001:db8::1]:53"); host:port
+// values pass through.
 func serverAddr(server string) string {
+	if h, _, ok := strings.Cut(server, "#"); ok {
+		server = h
+	}
 	if _, _, err := net.SplitHostPort(server); err != nil {
 		return net.JoinHostPort(server, "53")
 	}

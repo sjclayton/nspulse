@@ -50,7 +50,7 @@ func SetOrder(iface string, servers []string, candidate string) error {
 		return err
 	}
 	for deadline := time.Now().Add(adoptLimit); time.Now().Before(deadline); time.Sleep(adoptPoll) {
-		if link, err := discover.LinkStatus(iface); err == nil && link.Current == candidate {
+		if link, err := discover.LinkStatus(iface); err == nil && discover.ServerKey(link.Current) == discover.ServerKey(candidate) {
 			break
 		}
 	}

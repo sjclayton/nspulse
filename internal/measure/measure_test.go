@@ -125,6 +125,22 @@ func TestRoundV6Success(t *testing.T) {
 	}
 }
 
+func TestServerAddrHandlesAnnotationsAndZones(t *testing.T) {
+	cases := map[string]string{
+		"192.168.1.1":              "192.168.1.1:53",
+		"192.168.1.1#dns.example":  "192.168.1.1:53",
+		"2001:db8::1":              "[2001:db8::1]:53",
+		"2001:db8::1#dns.example":  "[2001:db8::1]:53",
+		"fe80::1%eno1":             "[fe80::1%eno1]:53",
+		"1.1.1.1:9953#dns.example": "1.1.1.1:9953",
+	}
+	for in, want := range cases {
+		if got := serverAddr(in); got != want {
+			t.Errorf("serverAddr(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestBuildQueryShape(t *testing.T) {
 	pkt, err := buildQuery(0x1234, "Google.COM.")
 	if err != nil {
