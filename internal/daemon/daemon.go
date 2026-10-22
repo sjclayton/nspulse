@@ -42,8 +42,6 @@ type state struct {
 	servers    []string // configured resolved order (for switching)
 	incumbent  string   // the server actually in use ("Current DNS Server")
 	measured   []string // last round's measured set (DHCP ∩ resolved order)
-	dhcp       []string
-	confirmed  map[string]bool
 	samples    map[string][]float64
 	roundMeds  map[string]float64
 	roundOK    map[string]bool
@@ -193,10 +191,7 @@ func (st *state) tick(roundsPerHour int) {
 	st.servers = ordered
 	st.incumbent = incumbentOf(link, ordered)
 	st.measured = set
-	st.dhcp = dhcp
-	st.confirmed = map[string]bool{}
 	for _, s := range set {
-		st.confirmed[s] = true
 		st.samples[s] = append(st.samples[s], samplesOf(results, s)...)
 	}
 	st.roundMeds = map[string]float64{}
@@ -258,14 +253,15 @@ func (st *state) decide(roundsPerHour int) {
 		log.Print("nspulse: " + st.lastErr)
 	} else if !wouldSwitch {
 		log.Printf("nspulse: keeping %s (candidate %s within margin or already primary)", incumbent, candidate)
+	} else if err := measure.Probe(candidate, cfg.Domains[0], cfg.Timeout); err != nil {
+		// Do not narrow to a server that is not answering: that would
+		// leave the link with no contactable server. Dry-run probes too,
+		// so it reports what a real run would do.
+		st.lastErr = fmt.Sprintf("candidate %s unreachable, keeping primary %s: %v", candidate, incumbent, err)
+		log.Printf("nspulse: %s", st.lastErr)
 	} else if cfg.DryRun {
 		st.lastSw = fmt.Sprintf("dry-run: would switch primary %s -> candidate %s", incumbent, candidate)
 		log.Printf("nspulse: %s", st.lastSw)
-	} else if err := measure.Probe(candidate, cfg.Domains[0], cfg.Timeout); err != nil {
-		// Do not narrow to a server that is not answering: that would
-		// leave the link with no contactable server.
-		st.lastErr = fmt.Sprintf("candidate %s unreachable, keeping primary %s: %v", candidate, incumbent, err)
-		log.Printf("nspulse: %s", st.lastErr)
 	} else if err := resolved.SetOrder(iface, servers, candidate); err != nil {
 		st.lastErr = err.Error()
 		log.Printf("nspulse: switch failed: %v", err)
@@ -320,8 +316,8 @@ func (st *state) snapshot() ipc.Status {
 	candidate, wouldSwitch := rank.Decide(st.samples, incumbent, st.cfg.Margin)
 	return ipc.Status{
 		Time: st.measuredAt, Iface: st.iface, Servers: st.servers,
-		Incumbent: incumbent, DHCPConfirmed: st.confirmed,
-		Round: st.round, RoundsPerHour: int(st.cfg.Window / st.cfg.Interval),
+		Incumbent: incumbent,
+		Round:     st.round, RoundsPerHour: int(st.cfg.Window / st.cfg.Interval),
 		Interval: st.cfg.Interval.String(), PerServer: per,
 		ProbableCandidate: candidate, WouldSwitch: wouldSwitch,
 		LastSwitch: st.lastSw, LastError: st.lastErr, DryRun: st.cfg.DryRun,

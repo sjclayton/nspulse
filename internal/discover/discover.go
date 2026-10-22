@@ -304,14 +304,7 @@ func filterIPs(in []string) []string {
 }
 
 func dedupe(in []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range in {
-		if !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
+	out := dedupeKeepOrder(in)
 	sort.Strings(out)
 	return out
 }

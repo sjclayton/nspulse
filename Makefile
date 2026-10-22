@@ -67,9 +67,7 @@ install: build
 	@install -m 0755 $(OUTPUT_DIR)/$(BINARY_NAME) /usr/local/bin/$(BINARY_NAME)
 	@install -m 0644 nspulse.service /etc/systemd/system/nspulse.service
 	@systemctl daemon-reload
-	@echo "Installed. Enable with: systemctl enable --now nspulse"
-
-%:
-	@:
+	@-systemctl try-restart nspulse
+	@echo "Installed. Service restarted if it was running; enable with: systemctl enable --now nspulse"
 
 .PHONY: all build build-bare debug clean run test check install

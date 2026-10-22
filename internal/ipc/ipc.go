@@ -29,7 +29,6 @@ type Status struct {
 	Iface             string                 `json:"iface"`
 	Servers           []string               `json:"servers"`
 	Incumbent         string                 `json:"incumbent"`
-	DHCPConfirmed     map[string]bool        `json:"dhcp_confirmed,omitempty"`
 	Round             int                    `json:"round"`
 	RoundsPerHour     int                    `json:"rounds_per_hour"`
 	Interval          string                 `json:"interval"`

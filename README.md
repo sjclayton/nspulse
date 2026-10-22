@@ -60,13 +60,13 @@ Example `status`:
 ```
 nspulse  iface=eno1  round 2/12 (every 5m0s)  at 01:39:07
 order:   *192.168.1.20   192.168.1.10
-server        n  fail  median     p95  last-round  dhcp?
-192.168.1.10  8     0  0.71ms  0.88ms      0.68ms    yes
-192.168.1.20  8     0  0.31ms  0.36ms      0.23ms    yes
+server        n  fail  median     p95  last-round
+192.168.1.10  8     0  0.71ms  0.88ms      0.68ms
+192.168.1.20  8     0  0.31ms  0.36ms      0.23ms
 probable candidate: 192.168.1.20  (no switch needed)
 ```
 
-`*` marks the incumbent, the server systemd-resolved is currently using. `at` is the time the last measurement round finished, and reads `(no rounds yet)` before the first round. `fail` counts queries that got no usable reply this hour. `last-round` shows `down` when a server answered nothing in the latest round. `dhcp?` shows whether the server is in the DHCP set. If the candidate beats the margin, the candidate line reads `-> WOULD SWITCH from <incumbent> (margin beaten)`.
+`*` marks the incumbent, the server systemd-resolved is currently using. `at` is the time the last measurement round finished, and reads `(no rounds yet)` before the first round. `fail` counts queries that got no usable reply this hour. `last-round` shows `down` when a server answered nothing in the latest round. If the candidate beats the margin, the candidate line reads `-> WOULD SWITCH from <incumbent> (margin beaten)`.
 
 ## Daemon flags
 

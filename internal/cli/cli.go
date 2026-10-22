@@ -94,7 +94,7 @@ func printStatus(st ipc.Status) {
 // numeric columns stay aligned regardless of IPv6 length or sample counts.
 func tableLines(st ipc.Status) []string {
 	type row struct {
-		server, n, fail, median, p95, last, dhcp string
+		server, n, fail, median, p95, last string
 	}
 	keys := make([]string, 0, len(st.PerServer))
 	for k := range st.PerServer {
@@ -108,13 +108,6 @@ func tableLines(st ipc.Status) []string {
 		if !s.LastRoundOK {
 			last = "down"
 		}
-		confirmed := "?"
-		if st.DHCPConfirmed != nil {
-			confirmed = "no"
-			if st.DHCPConfirmed[srv] {
-				confirmed = "yes"
-			}
-		}
 		rows = append(rows, row{
 			server: srv,
 			n:      fmt.Sprintf("%d", s.Samples),
@@ -122,7 +115,6 @@ func tableLines(st ipc.Status) []string {
 			median: fmt.Sprintf("%.2fms", s.MedianMs),
 			p95:    fmt.Sprintf("%.2fms", s.P95Ms),
 			last:   last,
-			dhcp:   confirmed,
 		})
 	}
 	w := func(head string, col func(row) string) int {
@@ -134,21 +126,20 @@ func tableLines(st ipc.Status) []string {
 		}
 		return n
 	}
-	ws, wn, wf, wm, wp, wl, wd := w("server", func(r row) string { return r.server }),
+	ws, wn, wf, wm, wp, wl := w("server", func(r row) string { return r.server }),
 		w("n", func(r row) string { return r.n }),
 		w("fail", func(r row) string { return r.fail }),
 		w("median", func(r row) string { return r.median }),
 		w("p95", func(r row) string { return r.p95 }),
-		w("last-round", func(r row) string { return r.last }),
-		w("dhcp?", func(r row) string { return r.dhcp })
+		w("last-round", func(r row) string { return r.last })
 	fmtRow := func(cols ...any) string {
-		return fmt.Sprintf("%-*s  %*s  %*s  %*s  %*s  %*s  %*s",
+		return fmt.Sprintf("%-*s  %*s  %*s  %*s  %*s  %*s",
 			ws, cols[0], wn, cols[1], wf, cols[2], wm, cols[3],
-			wp, cols[4], wl, cols[5], wd, cols[6])
+			wp, cols[4], wl, cols[5])
 	}
-	out := []string{fmtRow("server", "n", "fail", "median", "p95", "last-round", "dhcp?")}
+	out := []string{fmtRow("server", "n", "fail", "median", "p95", "last-round")}
 	for _, r := range rows {
-		out = append(out, fmtRow(r.server, r.n, r.fail, r.median, r.p95, r.last, r.dhcp))
+		out = append(out, fmtRow(r.server, r.n, r.fail, r.median, r.p95, r.last))
 	}
 	return out
 }

@@ -1,6 +1,8 @@
 package daemon
 
 import (
+	"net"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -122,5 +124,198 @@ func TestSnapshotTimeIsRoundTime(t *testing.T) {
 	st.reset()
 	if got := st.snapshot(); !got.Time.IsZero() || got.Round != 0 {
 		t.Fatalf("post-reset snapshot = time %v round %d, want zero time round 0", got.Time, got.Round)
+	}
+}
+
+// startTestDNS replies to any UDP query with a matching ID and QR set, which
+// is all measure.Probe needs to consider the server reachable.
+func startTestDNS(t *testing.T) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil || n < 4 {
+				return
+			}
+			resp := []byte{buf[0], buf[1], 0x81, 0x80, 0, 0, 0, 0, 0, 0, 0, 0}
+			_, _ = pc.WriteTo(resp, addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// closedUDPAddr returns a localhost address with nothing listening.
+func closedUDPAddr(t *testing.T) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := pc.LocalAddr().String()
+	pc.Close()
+	return addr
+}
+
+// stubResolvectl puts a fake resolvectl on PATH that records calls and
+// reports current as Current DNS Server.
+func stubResolvectl(t *testing.T, current string) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\n" +
+		"if [ \"$2\" = status ]; then\n" +
+		"  printf 'Current DNS Server: " + current + "\\n       DNS Servers: 10.0.0.1 10.0.0.2\\n'\n" +
+		"fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+func readCalls(t *testing.T, path string) []string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
+}
+
+func hasCall(calls []string, want string) bool {
+	for _, c := range calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+func decisionState(servers []string, incumbent string, samples map[string][]float64) *state {
+	return &state{
+		iface:     "eno1",
+		servers:   servers,
+		incumbent: incumbent,
+		samples:   samples,
+		roundMeds: map[string]float64{},
+		roundOK:   map[string]bool{},
+		cfg: Config{
+			Domains: []string{"example.com"},
+			Timeout: 200 * time.Millisecond,
+			Margin:  0.10,
+		},
+	}
+}
+
+func TestDecideSwitchesWhenCandidateConfirmed(t *testing.T) {
+	candidate := startTestDNS(t)
+	const incumbent = "192.0.2.1"
+	logPath := stubResolvectl(t, candidate)
+	st := decisionState([]string{incumbent, candidate}, incumbent, map[string][]float64{
+		incumbent: {50, 50, 50, 50},
+		candidate: {1, 1, 1, 1},
+	})
+
+	st.decide(12)
+
+	if st.incumbent != candidate {
+		t.Fatalf("incumbent = %q, want candidate %q", st.incumbent, candidate)
+	}
+	if len(st.servers) == 0 || st.servers[0] != candidate {
+		t.Fatalf("servers = %v, want candidate first", st.servers)
+	}
+	if st.lastErr != "" {
+		t.Fatalf("lastErr = %q, want empty", st.lastErr)
+	}
+	if !strings.Contains(st.lastSw, "primary 192.0.2.1 -> candidate "+candidate) {
+		t.Fatalf("lastSw = %q, want confirmed switch", st.lastSw)
+	}
+	calls := readCalls(t, logPath)
+	if !hasCall(calls, "dns eno1 "+candidate) {
+		t.Fatalf("calls = %v, want narrow to candidate", calls)
+	}
+	if !hasCall(calls, "dns eno1 "+candidate+" "+incumbent) {
+		t.Fatalf("calls = %v, want full restore", calls)
+	}
+}
+
+func TestDecideSkipsUnreachableCandidate(t *testing.T) {
+	candidate := closedUDPAddr(t)
+	const incumbent = "192.0.2.1"
+	logPath := stubResolvectl(t, candidate)
+	st := decisionState([]string{incumbent, candidate}, incumbent, map[string][]float64{
+		incumbent: {50, 50, 50, 50},
+		candidate: {1, 1, 1, 1},
+	})
+
+	st.decide(12)
+
+	if !strings.Contains(st.lastErr, "unreachable") {
+		t.Fatalf("lastErr = %q, want unreachable", st.lastErr)
+	}
+	if st.incumbent != incumbent {
+		t.Fatalf("incumbent = %q, want unchanged %q", st.incumbent, incumbent)
+	}
+	if calls := readCalls(t, logPath); len(calls) != 0 {
+		t.Fatalf("calls = %v, want no resolvectl write for a dead candidate", calls)
+	}
+}
+
+// Dry-run must not claim a switch to a candidate that a real run would
+// reject for being unreachable.
+func TestDecideDryRunStillProbes(t *testing.T) {
+	candidate := closedUDPAddr(t)
+	const incumbent = "192.0.2.1"
+	logPath := stubResolvectl(t, candidate)
+	st := decisionState([]string{incumbent, candidate}, incumbent, map[string][]float64{
+		incumbent: {50, 50, 50, 50},
+		candidate: {1, 1, 1, 1},
+	})
+	st.cfg.DryRun = true
+
+	st.decide(12)
+
+	if !strings.Contains(st.lastErr, "unreachable") {
+		t.Fatalf("lastErr = %q, want unreachable", st.lastErr)
+	}
+	if st.lastSw != "" {
+		t.Fatalf("lastSw = %q, want no would-switch message", st.lastSw)
+	}
+	if calls := readCalls(t, logPath); len(calls) != 0 {
+		t.Fatalf("calls = %v, want no resolvectl write", calls)
+	}
+}
+
+func TestDecideKeepsIncumbentWhenSwitchNotConfirmed(t *testing.T) {
+	candidate := startTestDNS(t)
+	const incumbent = "192.0.2.1"
+	logPath := stubResolvectl(t, incumbent)
+	st := decisionState([]string{incumbent, candidate}, incumbent, map[string][]float64{
+		incumbent: {50, 50, 50, 50},
+		candidate: {1, 1, 1, 1},
+	})
+
+	st.decide(12)
+
+	if !strings.Contains(st.lastErr, "not confirmed") {
+		t.Fatalf("lastErr = %q, want not confirmed", st.lastErr)
+	}
+	if st.incumbent != incumbent {
+		t.Fatalf("incumbent = %q, want unchanged %q", st.incumbent, incumbent)
+	}
+	if len(st.servers) == 0 || st.servers[0] != candidate {
+		t.Fatalf("servers = %v, want restored order with candidate first", st.servers)
+	}
+	if !hasCall(readCalls(t, logPath), "dns eno1 "+candidate+" "+incumbent) {
+		t.Fatal("want full restore after failed adoption")
 	}
 }

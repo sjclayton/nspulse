@@ -37,6 +37,13 @@ func TestDecideP95BreaksNearTie(t *testing.T) {
 	_ = sw
 }
 
+// Nearest-rank p95 of four values is the maximum, not the third smallest.
+func TestPercentileSmallSample(t *testing.T) {
+	if got := percentile([]float64{1, 2, 3, 100}, 95); got != 100 {
+		t.Fatalf("p95 = %v, want 100", got)
+	}
+}
+
 func TestDecideExactTiePrefersIncumbent(t *testing.T) {
 	samples := map[string][]float64{
 		"a": {5, 5, 5, 5},

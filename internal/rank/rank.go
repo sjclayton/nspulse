@@ -37,7 +37,7 @@ func percentile(v []float64, p float64) float64 {
 	}
 	cp := append([]float64(nil), v...)
 	sort.Float64s(cp)
-	k := int((p / 100) * float64(len(cp)))
+	k := (int(p)*len(cp) + 99) / 100 // ceil(p/100 * n), nearest-rank
 	if k < 1 {
 		k = 1
 	}

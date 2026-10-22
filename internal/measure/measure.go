@@ -22,7 +22,6 @@ import (
 type Result struct {
 	Server  string
 	Samples []float64
-	Err     error // non-nil only when every query failed
 }
 
 // Round queries each server samples times for the configured names (cycled
@@ -49,9 +48,6 @@ func probe(server string, names []string, samples int, timeout time.Duration) Re
 		if rtt, err := query(addr, names[i%len(names)], timeout); err == nil {
 			res.Samples = append(res.Samples, rtt)
 		}
-	}
-	if len(res.Samples) == 0 {
-		res.Err = errAllFailed
 	}
 	return res
 }
@@ -131,9 +127,3 @@ func buildQuery(id uint16, name string) ([]byte, error) {
 	pkt = append(pkt, 0x00, 0x00, 0x01, 0x00, 0x01) // root, QTYPE=A, QCLASS=IN
 	return pkt, nil
 }
-
-type allFailed struct{}
-
-func (allFailed) Error() string { return "all queries failed" }
-
-var errAllFailed error = allFailed{}

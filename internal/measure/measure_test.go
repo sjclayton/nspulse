@@ -42,9 +42,6 @@ func TestRoundSuccess(t *testing.T) {
 	if len(res) != 1 {
 		t.Fatalf("want 1 result, got %d", len(res))
 	}
-	if res[0].Err != nil {
-		t.Fatalf("want success, got err %v", res[0].Err)
-	}
 	if len(res[0].Samples) != 3 {
 		t.Fatalf("want 3 samples, got %d (%+v)", len(res[0].Samples), res[0])
 	}
@@ -61,7 +58,7 @@ func TestRoundAllFail(t *testing.T) {
 	if len(res) != 1 {
 		t.Fatalf("want 1 result, got %d", len(res))
 	}
-	if res[0].Err == nil || len(res[0].Samples) != 0 {
+	if len(res[0].Samples) != 0 {
 		t.Fatalf("want all-failed result, got %+v", res[0])
 	}
 }
@@ -111,7 +108,7 @@ func startTestServerV6(t *testing.T) string {
 func TestRoundV6Success(t *testing.T) {
 	addr := startTestServerV6(t) // "[::1]:port"
 	res := Round([]string{addr}, []string{"google.com"}, 2, 2*time.Second)
-	if len(res) != 1 || res[0].Err != nil || len(res[0].Samples) != 2 {
+	if len(res) != 1 || len(res[0].Samples) != 2 {
 		t.Fatalf("want 2 v6 samples, got %+v", res)
 	}
 	// Bare v6 IP must also work (JoinHostPort bracketing, not ":53" suffix).
@@ -120,7 +117,7 @@ func TestRoundV6Success(t *testing.T) {
 		t.Fatal(err)
 	}
 	res = Round([]string{host}, []string{"google.com"}, 2, 2*time.Second)
-	if len(res) != 1 || res[0].Err != nil || len(res[0].Samples) != 2 {
+	if len(res) != 1 || len(res[0].Samples) != 2 {
 		t.Fatalf("want 2 bare-v6 samples, got %+v", res)
 	}
 }
