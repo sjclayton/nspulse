@@ -5,7 +5,6 @@ package discover
 
 import (
 	"bufio"
-	"bytes"
 	"fmt"
 	"io"
 	"net"
@@ -227,41 +226,33 @@ func fromNMCLI(iface string) ([]string, error) {
 	return dedupe(servers), nil
 }
 
-// fromNetworkdLeases parses DNS= lines in /run/systemd/netif/leases/*.
+// networkdLeaseDir is a variable so tests can point at fixtures.
+var networkdLeaseDir = "/run/systemd/netif/leases"
+
+// fromNetworkdLeases parses DNS= lines from the lease of iface only.
+// systemd names lease files by ifindex, which scopes the lookup exactly:
+// another interface's lease (a LAN link, a VPN, a second default route)
+// must never contribute DNS servers, even if it has one.
 func fromNetworkdLeases(iface string) ([]string, error) {
-	matches, _ := filepath.Glob("/run/systemd/netif/leases/*")
+	ni, err := net.InterfaceByName(iface)
+	if err != nil {
+		return nil, fmt.Errorf("find interface %s: %w", iface, err)
+	}
+	data, err := os.ReadFile(filepath.Join(networkdLeaseDir, strconv.Itoa(ni.Index)))
+	if err != nil {
+		return nil, fmt.Errorf("no networkd lease for %s: %w", iface, err)
+	}
 	var servers []string
-	for _, p := range matches {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		if !leaseMentionsIface(data, iface) {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "DNS="); ok {
-				servers = append(servers, strings.Fields(rest)...)
-			}
+	for _, line := range strings.Split(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(strings.TrimSpace(line), "DNS="); ok {
+			servers = append(servers, strings.Fields(rest)...)
 		}
 	}
 	servers = filterIPs(servers)
 	if len(servers) == 0 {
-		return nil, fmt.Errorf("no DNS in networkd leases for %s", iface)
+		return nil, fmt.Errorf("no DNS in networkd lease for %s", iface)
 	}
 	return dedupe(servers), nil
-}
-
-// leaseMentionsIface is a best-effort check; lease files have no iface field
-// in all versions, so when unsure we accept the file (caller intersects with
-// resolved's per-link list anyway).
-func leaseMentionsIface(data []byte, iface string) bool {
-	if !bytes.Contains(data, []byte(iface)) {
-		// No iface marker: still accept, single-default-route hosts
-		// normally have exactly one lease file.
-		return true
-	}
-	return true
 }
 
 // fromDHClientLeases parses option domain-name-servers in dhclient leases.

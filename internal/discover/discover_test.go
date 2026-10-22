@@ -1,9 +1,11 @@
 package discover
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -207,6 +209,41 @@ esac
 		t.Fatal(err)
 	}
 	want := []string{"192.168.1.10", "2001:db8::1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// A lease for another interface must never contribute DNS servers, even when
+// the active interface has no lease of its own.
+func TestNetworkdLeasesOnlyReadsActiveIface(t *testing.T) {
+	dir := t.TempDir()
+	old := networkdLeaseDir
+	networkdLeaseDir = dir
+	t.Cleanup(func() { networkdLeaseDir = old })
+
+	ni, err := net.InterfaceByName("lo")
+	if err != nil {
+		t.Skipf("loopback interface unavailable: %v", err)
+	}
+	write := func(index int, dns string) {
+		path := filepath.Join(dir, strconv.Itoa(index))
+		if err := os.WriteFile(path, []byte("DNS="+dns+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write(ni.Index+1000, "10.0.0.1")
+	if _, err := fromNetworkdLeases("lo"); err == nil {
+		t.Fatal("used another interface's lease")
+	}
+
+	write(ni.Index, "192.168.1.10")
+	got, err := fromNetworkdLeases("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"192.168.1.10"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
 	}
