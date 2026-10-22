@@ -126,6 +126,79 @@ func TestSetOrderRetriesFailedRestore(t *testing.T) {
 	}
 }
 
+// A single-server link needs no reordering and must never be written at all,
+// so that server stays configured even while it is down.
+func TestSetOrderSingleServerIsNoOp(t *testing.T) {
+	log := stub(t, "")
+	if err := SetOrder("eno1", []string{"10.0.0.1"}, "10.0.0.1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(log); err == nil {
+		t.Fatal("single-server link must not be touched")
+	}
+}
+
+// If narrowing fails, SetOrder returns the error and makes no further calls.
+func TestSetOrderNarrowFailure(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	if err := SetOrder("eno1", []string{"10.0.0.1", "10.0.0.2"}, "10.0.0.2"); err == nil {
+		t.Fatal("want error when the narrowing call fails")
+	}
+	got := calls(t, logPath)
+	if len(got) != 1 || got[0] != "dns eno1 10.0.0.2" {
+		t.Fatalf("calls = %v, want only the failed narrow", got)
+	}
+}
+
+// If both restore attempts fail, the error is returned rather than swallowed.
+func TestSetOrderDoubleRestoreFailure(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	countPath := filepath.Join(dir, "count")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$*\" >> " + logPath + "\n" +
+		"if [ \"$2\" = status ]; then\n" +
+		"  printf 'Current DNS Server: 10.0.0.2\\n       DNS Servers: 10.0.0.1 10.0.0.2\\n'\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"if [ \"$1\" = dns ]; then\n" +
+		"  n=$(cat " + countPath + " 2>/dev/null || echo 0)\n" +
+		"  n=$((n+1))\n" +
+		"  printf '%s' \"$n\" > " + countPath + "\n" +
+		"  if [ \"$n\" -ge 2 ]; then exit 1; fi\n" +
+		"fi\n" +
+		"exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	oldLimit, oldPoll := adoptLimit, adoptPoll
+	adoptLimit, adoptPoll = time.Second, time.Millisecond
+	t.Cleanup(func() { adoptLimit, adoptPoll = oldLimit, oldPoll })
+
+	if err := SetOrder("eno1", []string{"10.0.0.1", "10.0.0.2"}, "10.0.0.2"); err == nil {
+		t.Fatal("want error when both restores fail")
+	}
+	got := calls(t, logPath)
+	if want := "dns eno1 10.0.0.2 10.0.0.1"; got[len(got)-1] != want {
+		t.Fatalf("last call = %q, want restore attempt %q", got[len(got)-1], want)
+	}
+	count, err := os.ReadFile(countPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(count) != "3" {
+		t.Fatalf("dns calls = %s, want 3 (narrow + two restores)", count)
+	}
+}
+
 func TestSetOrderRejectsUnknownCandidate(t *testing.T) {
 	log := stub(t, "")
 	if err := SetOrder("eno1", []string{"10.0.0.1"}, "10.0.0.2"); err == nil {

@@ -255,27 +255,45 @@ func fromNetworkdLeases(iface string) ([]string, error) {
 	return dedupe(servers), nil
 }
 
-// fromDHClientLeases parses option domain-name-servers in dhclient leases.
+// dhclientLeaseGlobs is a variable so tests can point at fixtures.
+var dhclientLeaseGlobs = []string{
+	"/var/lib/dhcp/dhclient*.leases",
+	"/var/lib/NetworkManager/dhclient*.lease",
+}
+
+// fromDHClientLeases parses option domain-name-servers from the lease blocks
+// for iface. Shared lease files can hold blocks for several interfaces, so
+// only options inside the matching interface block are used.
 func fromDHClientLeases(iface string) ([]string, error) {
-	paths, _ := filepath.Glob("/var/lib/dhcp/dhclient*.leases")
-	paths2, _ := filepath.Glob("/var/lib/NetworkManager/dhclient*.lease")
-	paths = append(paths, paths2...)
 	var servers []string
-	for _, p := range paths {
-		data, err := os.ReadFile(p)
-		if err != nil {
-			continue
-		}
-		if !strings.Contains(string(data), iface) {
-			continue
-		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(line)
-			if rest, ok := strings.CutPrefix(line, "option domain-name-servers"); ok {
-				rest = strings.Trim(strings.TrimSpace(rest), ";")
-				for _, ip := range strings.Split(rest, ",") {
-					if net.ParseIP(strings.TrimSpace(ip)) != nil {
-						servers = append(servers, strings.TrimSpace(ip))
+	for _, pattern := range dhclientLeaseGlobs {
+		paths, _ := filepath.Glob(pattern)
+		for _, p := range paths {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				continue
+			}
+			if !strings.Contains(string(data), iface) {
+				continue
+			}
+			current := ""
+			sawIface := false
+			for _, line := range strings.Split(string(data), "\n") {
+				line = strings.TrimSpace(line)
+				if rest, ok := strings.CutPrefix(line, "interface "); ok {
+					current = strings.Trim(strings.TrimSpace(rest), `";`)
+					sawIface = true
+					continue
+				}
+				if rest, ok := strings.CutPrefix(line, "option domain-name-servers"); ok {
+					if sawIface && current != iface {
+						continue
+					}
+					rest = strings.Trim(strings.TrimSpace(rest), ";")
+					for _, ip := range strings.Split(rest, ",") {
+						if net.ParseIP(strings.TrimSpace(ip)) != nil {
+							servers = append(servers, strings.TrimSpace(ip))
+						}
 					}
 				}
 			}

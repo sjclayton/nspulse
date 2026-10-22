@@ -264,3 +264,153 @@ func TestServerKey(t *testing.T) {
 		}
 	}
 }
+
+// --- DHCP discovery chain -------------------------------------------------
+
+func stubNmcli(t *testing.T, lines ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n"
+	for _, line := range lines {
+		script += "printf '%s\\n' '" + line + "'\n"
+	}
+	script += "exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func stubNmcliFailing(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+func setNetworkdLeaseDir(t *testing.T, dir string) {
+	t.Helper()
+	old := networkdLeaseDir
+	networkdLeaseDir = dir
+	t.Cleanup(func() { networkdLeaseDir = old })
+}
+
+func writeNetworkdLease(t *testing.T, dir, iface, dns string) {
+	t.Helper()
+	ni, err := net.InterfaceByName(iface)
+	if err != nil {
+		t.Skipf("interface %s unavailable: %v", iface, err)
+	}
+	path := filepath.Join(dir, strconv.Itoa(ni.Index))
+	if err := os.WriteFile(path, []byte("DNS="+dns+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func setDHClientGlobs(t *testing.T, patterns ...string) {
+	t.Helper()
+	old := dhclientLeaseGlobs
+	dhclientLeaseGlobs = patterns
+	t.Cleanup(func() { dhclientLeaseGlobs = old })
+}
+
+func writeDHClientLease(t *testing.T, dir, name, body string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func dhclientLease(iface, dns string) string {
+	return "lease {\n  interface \"" + iface + "\";\n  option domain-name-servers " + dns + ";\n}\n"
+}
+
+// nmcli wins when it has a non-empty answer, even if networkd also has an
+// IPv6 server. The source priority is deliberate: one discovery path owns
+// the link's DHCP answer.
+func TestDHCPServersPrefersNMCLI(t *testing.T) {
+	ndDir := t.TempDir()
+	setNetworkdLeaseDir(t, ndDir)
+	writeNetworkdLease(t, ndDir, "lo", "10.0.0.2 2001:db8::2")
+
+	dhDir := t.TempDir()
+	writeDHClientLease(t, dhDir, "dhclient-lo.lease", dhclientLease("lo", "10.0.0.3"))
+	setDHClientGlobs(t, filepath.Join(dhDir, "*.lease"))
+
+	stubNmcli(t, "IP4.DNS[1]:10.0.0.1")
+
+	got, err := DHCPServers("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// An empty/failed nmcli falls through to the active interface's networkd lease.
+func TestDHCPServersFallsBackToNetworkd(t *testing.T) {
+	ndDir := t.TempDir()
+	setNetworkdLeaseDir(t, ndDir)
+	writeNetworkdLease(t, ndDir, "lo", "10.0.0.2")
+
+	dhDir := t.TempDir()
+	writeDHClientLease(t, dhDir, "dhclient-lo.lease", dhclientLease("lo", "10.0.0.3"))
+	setDHClientGlobs(t, filepath.Join(dhDir, "*.lease"))
+
+	stubNmcliFailing(t)
+
+	got, err := DHCPServers("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// With no nmcli or networkd answer, dhclient is the last source.
+func TestDHCPServersFallsBackToDHClient(t *testing.T) {
+	setNetworkdLeaseDir(t, t.TempDir())
+
+	dhDir := t.TempDir()
+	writeDHClientLease(t, dhDir, "dhclient-lo.lease", dhclientLease("lo", "10.0.0.3"))
+	setDHClientGlobs(t, filepath.Join(dhDir, "*.lease"))
+
+	stubNmcliFailing(t)
+
+	got, err := DHCPServers("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// A shared lease file may hold blocks for several interfaces; only the
+// matching block's servers are used.
+func TestFromDHClientLeasesUsesMatchingBlock(t *testing.T) {
+	dir := t.TempDir()
+	body := dhclientLease("eth9", "10.0.0.9") + dhclientLease("lo", "192.0.2.9, 192.0.2.10")
+	writeDHClientLease(t, dir, "dhclient.leases", body)
+	setDHClientGlobs(t, filepath.Join(dir, "*.leases"))
+
+	got, err := fromDHClientLeases("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"192.0.2.10", "192.0.2.9"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+
+	if _, err := fromDHClientLeases("enoX"); err == nil {
+		t.Fatal("want error when no block matches the interface")
+	}
+}

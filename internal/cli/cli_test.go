@@ -46,6 +46,18 @@ func fieldSpans(s string) [][2]int {
 	return spans
 }
 
+func TestMarkIncumbent(t *testing.T) {
+	st := ipc.Status{
+		Servers:   []string{"192.168.1.10", "192.168.1.20"},
+		Incumbent: "192.168.1.20",
+	}
+	got := markIncumbent(st)
+	want := []string{" 192.168.1.10", "*192.168.1.20"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
 // Headings and data must share column boundaries: the server column is
 // left-aligned (values start where the heading starts), the rest are
 // right-aligned (values end where the heading ends). Exercises IPv6-wide

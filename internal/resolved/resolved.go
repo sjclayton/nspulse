@@ -40,6 +40,12 @@ func SetOrder(iface string, servers []string, candidate string) error {
 	if !found {
 		return fmt.Errorf("candidate %s not in server list", candidate)
 	}
+	if len(servers) == 1 {
+		// Nothing to reorder. Leave the link untouched: a host with one
+		// configured server must keep it even when it is down, and there
+		// is no fallback to lose.
+		return nil
+	}
 	ordered := []string{candidate}
 	for _, s := range servers {
 		if s != candidate {

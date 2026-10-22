@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -163,20 +164,50 @@ func closedUDPAddr(t *testing.T) string {
 }
 
 // stubResolvectl puts a fake resolvectl on PATH that records calls and
-// reports current as Current DNS Server.
-func stubResolvectl(t *testing.T, current string) string {
+// reports current as Current DNS Server. The optional servers form the DNS
+// Servers line (default 10.0.0.1 10.0.0.2).
+func stubResolvectl(t *testing.T, current string, servers ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	logPath := filepath.Join(dir, "calls")
+	list := "10.0.0.1 10.0.0.2"
+	if len(servers) > 0 {
+		list = strings.Join(servers, " ")
+	}
 	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\n" +
 		"if [ \"$2\" = status ]; then\n" +
-		"  printf 'Current DNS Server: " + current + "\\n       DNS Servers: 10.0.0.1 10.0.0.2\\n'\n" +
+		"  printf 'Current DNS Server: " + current + "\\n       DNS Servers: " + list + "\\n'\n" +
 		"fi\n"
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return logPath
+}
+
+// stubNmcli puts a fake nmcli on PATH that reports servers as IP4.DNS.
+func stubNmcli(t *testing.T, servers ...string) {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n"
+	for i, s := range servers {
+		script += fmt.Sprintf("printf 'IP4.DNS[%d]:%s\\n'\n", i+1, s)
+	}
+	script += "exit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// stubNmcliFailing makes DHCP discovery fall through to networkd/dhclient.
+func stubNmcliFailing(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 }
 
 func readCalls(t *testing.T, path string) []string {
@@ -317,5 +348,200 @@ func TestDecideKeepsIncumbentWhenSwitchNotConfirmed(t *testing.T) {
 	}
 	if !hasCall(readCalls(t, logPath), "dns eno1 "+candidate+" "+incumbent) {
 		t.Fatal("want full restore after failed adoption")
+	}
+}
+
+// A failed SetOrder must be recorded, with the incumbent kept and no
+// dry-run success message.
+func TestDecideRecordsSwitchError(t *testing.T) {
+	candidate := startTestDNS(t)
+	const incumbent = "192.0.2.1"
+	logPath := stubResolvectlDNSError(t, candidate)
+	st := decisionState([]string{incumbent, candidate}, incumbent, map[string][]float64{
+		incumbent: {50, 50, 50, 50},
+		candidate: {1, 1, 1, 1},
+	})
+
+	st.decide(12)
+
+	if !strings.Contains(st.lastErr, "resolvectl dns") {
+		t.Fatalf("lastErr = %q, want resolvectl failure", st.lastErr)
+	}
+	if st.incumbent != incumbent {
+		t.Fatalf("incumbent = %q, want unchanged %q", st.incumbent, incumbent)
+	}
+	if st.lastSw != "" {
+		t.Fatalf("lastSw = %q, want empty", st.lastSw)
+	}
+	if !hasCall(readCalls(t, logPath), "dns eno1 "+candidate) {
+		t.Fatal("want an attempted narrow to the candidate")
+	}
+}
+
+// stubResolvectlDNSError reports status normally but fails every dns write.
+func stubResolvectlDNSError(t *testing.T, current string) string {
+	t.Helper()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "calls")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + logPath + "\n" +
+		"if [ \"$2\" = status ]; then\n" +
+		"  printf 'Current DNS Server: " + current + "\\n       DNS Servers: " + current + "\\n'\n" +
+		"elif [ \"$1\" = dns ]; then\n" +
+		"  exit 1\n" +
+		"fi\n"
+	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return logPath
+}
+
+// A host with one configured server must never narrow or rewrite it, even
+// when that server is unhealthy.
+func TestDecideSingleDownServerLeftAlone(t *testing.T) {
+	const server = "192.0.2.1"
+	logPath := stubResolvectl(t, server, server)
+	st := decisionState([]string{server}, server, map[string][]float64{})
+
+	st.decide(12)
+
+	if !strings.Contains(st.lastErr, "all servers unhealthy") {
+		t.Fatalf("lastErr = %q, want all servers unhealthy", st.lastErr)
+	}
+	if st.incumbent != server {
+		t.Fatalf("incumbent = %q, want %q", st.incumbent, server)
+	}
+	if calls := readCalls(t, logPath); len(calls) != 0 {
+		t.Fatalf("calls = %v, want no resolvectl write for the only server", calls)
+	}
+}
+
+func tickState(iface string, domains []string) *state {
+	return &state{
+		samples:   map[string][]float64{},
+		roundMeds: map[string]float64{},
+		roundOK:   map[string]bool{},
+		cfg: Config{
+			Iface: iface, Domains: domains, Samples: 1,
+			Timeout: 200 * time.Millisecond, Margin: 0.10,
+		},
+	}
+}
+
+func TestTickMeasuresRound(t *testing.T) {
+	const iface = "nspulse-test0"
+	server := startTestDNS(t)
+	stubResolvectl(t, server, server)
+	stubNmcli(t, "127.0.0.1")
+
+	st := tickState(iface, []string{"example.com"})
+	st.tick(99)
+
+	if st.round != 1 {
+		t.Fatalf("round = %d, want 1", st.round)
+	}
+	if st.iface != iface {
+		t.Fatalf("iface = %q, want %q", st.iface, iface)
+	}
+	if len(st.measured) != 1 || st.measured[0] != server {
+		t.Fatalf("measured = %v, want [%s]", st.measured, server)
+	}
+	if got := st.samples[server]; len(got) != 1 {
+		t.Fatalf("samples[%s] = %v, want 1 sample", server, got)
+	}
+	if st.measuredAt.IsZero() {
+		t.Fatal("measuredAt is zero after a round")
+	}
+}
+
+// Static/resolv-only links must still be measured when DHCP discovery fails.
+func TestTickFallsBackToResolvedWhenDHCPFails(t *testing.T) {
+	server := startTestDNS(t)
+	stubResolvectl(t, server, server)
+	stubNmcliFailing(t)
+
+	st := tickState("nspulse-test1", []string{"example.com"})
+	st.tick(99)
+
+	if len(st.measured) != 1 || st.measured[0] != server {
+		t.Fatalf("measured = %v, want resolved fallback [%s]", st.measured, server)
+	}
+	if got := st.samples[server]; len(got) != 1 {
+		t.Fatalf("samples[%s] = %v, want 1 sample", server, got)
+	}
+	if st.lastErr != "" {
+		t.Fatalf("lastErr = %q, want empty", st.lastErr)
+	}
+}
+
+func TestTickResetsHourOnIfaceChange(t *testing.T) {
+	const iface = "nspulse-test2"
+	server := startTestDNS(t)
+	stubResolvectl(t, server, server)
+	stubNmcli(t, "127.0.0.1")
+
+	st := tickState(iface, []string{"example.com"})
+	st.iface = "old0"
+	st.round = 3
+	st.samples = map[string][]float64{"old0": {1, 2}}
+	st.measured = []string{"old0"}
+
+	st.tick(99)
+
+	if st.round != 1 {
+		t.Fatalf("round = %d, want 1 after reset", st.round)
+	}
+	if _, ok := st.samples["old0"]; ok {
+		t.Fatal("old interface samples survived the reset")
+	}
+	if got := st.samples[server]; len(got) != 1 {
+		t.Fatalf("samples[%s] = %v, want 1 sample", server, got)
+	}
+}
+
+func TestTickResetsHourOnServerSetChange(t *testing.T) {
+	const iface = "nspulse-test3"
+	server := startTestDNS(t)
+	stubResolvectl(t, server, server)
+	stubNmcli(t, "127.0.0.1")
+
+	st := tickState(iface, []string{"example.com"})
+	st.iface = iface
+	st.round = 3
+	st.samples = map[string][]float64{"old": {1, 2}}
+	st.measured = []string{"old"}
+
+	st.tick(99)
+
+	if st.round != 1 {
+		t.Fatalf("round = %d, want 1 after reset", st.round)
+	}
+	if _, ok := st.samples["old"]; ok {
+		t.Fatal("old server samples survived the reset")
+	}
+	if len(st.measured) != 1 || st.measured[0] != server {
+		t.Fatalf("measured = %v, want [%s]", st.measured, server)
+	}
+}
+
+// The last round of the window must hand off to decide and start a fresh hour.
+func TestTickDecidesAtHourEnd(t *testing.T) {
+	server := startTestDNS(t)
+	stubResolvectl(t, server, server)
+	stubNmcli(t, "127.0.0.1")
+
+	// An invalid name makes every query fail, so decide sees no healthy
+	// candidate and records the all-unhealthy error.
+	st := tickState("nspulse-test4", []string{""})
+	st.round = 9
+	st.measured = []string{server}
+
+	st.tick(10)
+
+	if st.round != 0 {
+		t.Fatalf("round = %d, want 0 after the hourly decision", st.round)
+	}
+	if !strings.Contains(st.lastErr, "all servers unhealthy") {
+		t.Fatalf("lastErr = %q, want hourly decision to run", st.lastErr)
 	}
 }
