@@ -39,7 +39,7 @@ type state struct {
 	mu         sync.RWMutex
 	iface      string
 	servers    []string // configured resolved order (for switching)
-	primary    string   // server actually in use ("Current DNS Server")
+	incumbent  string   // the server actually in use ("Current DNS Server")
 	measured   []string // last round's measured set (DHCP ∩ resolved order)
 	dhcp       []string
 	confirmed  map[string]bool
@@ -63,7 +63,7 @@ func Run(args []string) error {
 	domains := fs.String("domains", "google.com,cloudflare.com", "comma-separated A-query names, cycled")
 	socket := fs.String("socket", "/run/nspulse.sock", "Unix socket for status/watch clients")
 	iface := fs.String("iface", "auto", "interface to manage (auto = default route)")
-	margin := fs.Float64("margin", 0.10, "challenger must beat incumbent median by this fraction to switch")
+	margin := fs.Float64("margin", 0.10, "candidate must beat incumbent median by this fraction to switch")
 	dryRun := fs.Bool("dry-run", false, "log switching decisions without calling resolvectl")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -179,7 +179,7 @@ func (st *state) tick(roundsPerHour int) {
 	st.mu.Lock()
 	st.iface = iface
 	st.servers = ordered
-	st.primary = primaryOf(link, ordered)
+	st.incumbent = incumbentOf(link, ordered)
 	st.measured = set
 	st.dhcp = dhcp
 	st.confirmed = map[string]bool{}
@@ -214,7 +214,7 @@ func (st *state) tick(roundsPerHour int) {
 	}
 }
 
-// decide picks the hourly winner and switches if needed, then resets.
+// decide picks the hourly candidate and switches if needed, then resets.
 // The incumbent is the server actually in use (resolved's Current DNS
 // Server), not merely the head of the configured list: the two can differ
 // after a failure or an external reorder.
@@ -222,12 +222,11 @@ func (st *state) decide(roundsPerHour int) {
 	st.mu.RLock()
 	samples := copySamples(st.samples)
 	servers := append([]string(nil), st.servers...)
-	primary := st.primary
+	incumbent := st.incumbent
 	iface := st.iface
 	cfg := st.cfg
 	st.mu.RUnlock()
 
-	incumbent := primary
 	if incumbent == "" && len(servers) > 0 {
 		incumbent = servers[0]
 	}
@@ -248,18 +247,38 @@ func (st *state) decide(roundsPerHour int) {
 	} else if !wouldSwitch {
 		log.Printf("nspulse: keeping %s (candidate %s within margin or already primary)", incumbent, candidate)
 	} else if cfg.DryRun {
-		st.lastSw = fmt.Sprintf("dry-run: would switch %s -> %s", incumbent, candidate)
+		st.lastSw = fmt.Sprintf("dry-run: would switch primary %s -> candidate %s", incumbent, candidate)
 		log.Printf("nspulse: %s", st.lastSw)
+	} else if err := measure.Probe(candidate, cfg.Domains[0], cfg.Timeout); err != nil {
+		// Do not narrow to a server that is not answering: that would
+		// leave the link with no contactable server.
+		st.lastErr = fmt.Sprintf("candidate %s unreachable, keeping primary %s: %v", candidate, incumbent, err)
+		log.Printf("nspulse: %s", st.lastErr)
 	} else if err := resolved.SetOrder(iface, servers, candidate); err != nil {
 		st.lastErr = err.Error()
 		log.Printf("nspulse: switch failed: %v", err)
+	} else if link, err := discover.LinkStatus(iface); err != nil || link.Current != candidate {
+		// Full list is restored either way; resolved just did not adopt
+		// the candidate. Keep reporting the server it actually uses.
+		current := link.Current
+		if err != nil {
+			current = "unknown: " + err.Error()
+		} else if current == "" {
+			current = "none"
+		}
+		st.lastErr = fmt.Sprintf("switch to candidate %s not confirmed (resolved uses %s), keeping primary %s", candidate, current, incumbent)
+		log.Printf("nspulse: %s", st.lastErr)
+		st.servers = reorderFirst(servers, candidate)
+		if link.Current != "" {
+			st.incumbent = link.Current
+		}
 	} else {
-		st.lastSw = fmt.Sprintf("%s: primary %s -> %s at %s", iface, incumbent, candidate, time.Now().Format(time.RFC3339))
+		st.lastSw = fmt.Sprintf("%s: primary %s -> candidate %s at %s", iface, incumbent, candidate, time.Now().Format(time.RFC3339))
 		log.Printf("nspulse: %s", st.lastSw)
 		// Update local view so WouldSwitch reads correctly until the
 		// next tick refreshes from resolvectl.
 		st.servers = reorderFirst(servers, candidate)
-		st.primary = candidate
+		st.incumbent = candidate
 	}
 	st.round = 0
 	st.measuredAt = time.Time{}
@@ -282,14 +301,14 @@ func (st *state) snapshot() ipc.Status {
 			LastRoundOK:       st.roundOK[srv],
 		}
 	}
-	incumbent := st.primary
+	incumbent := st.incumbent
 	if incumbent == "" && len(st.servers) > 0 {
 		incumbent = st.servers[0]
 	}
 	candidate, wouldSwitch := rank.Decide(st.samples, incumbent, st.cfg.Margin)
 	return ipc.Status{
 		Time: st.measuredAt, Iface: st.iface, Servers: st.servers,
-		Primary: incumbent, DHCPConfirmed: st.confirmed,
+		Incumbent: incumbent, DHCPConfirmed: st.confirmed,
 		Round: st.round, RoundsPerHour: int(st.cfg.Window / st.cfg.Interval),
 		Interval: st.cfg.Interval.String(), PerServer: per,
 		ProbableCandidate: candidate, WouldSwitch: wouldSwitch,
@@ -329,10 +348,10 @@ func copySamples(in map[string][]float64) map[string][]float64 {
 	return out
 }
 
-// primaryOf resolves the server actually in use. It trusts resolved's
+// incumbentOf resolves the server actually in use. It trusts resolved's
 // Current DNS Server when present in the configured list; otherwise (stale
 // or empty report) it falls back to the head of the configured order.
-func primaryOf(link discover.LinkDNS, ordered []string) string {
+func incumbentOf(link discover.LinkDNS, ordered []string) string {
 	if link.Current != "" {
 		for _, s := range ordered {
 			if s == link.Current {

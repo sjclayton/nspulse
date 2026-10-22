@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// Regression: primary is Current DNS Server, not list position 0.
-func TestParseLinkStatusPrimaryIsCurrentServer(t *testing.T) {
+// Regression: the incumbent is Current DNS Server, not list position 0.
+func TestParseLinkStatusIncumbentIsCurrentServer(t *testing.T) {
 	out := `Link 2 (eno1)
     Current Scopes: DNS LLMNR/IPv4 LLMNR/IPv6 mDNS/IPv4 mDNS/IPv6
          Protocols: +DefaultRoute +LLMNR +mDNS -DNSOverTLS DNSSEC=no/unsupported
@@ -106,7 +106,7 @@ func TestParseV6RoutesDefaultOnly(t *testing.T) {
 		"00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n"
 	routes := parseV6Routes(in)
 	if len(routes) != 1 {
-		t.Fatalf("want exactly 1 default candidate, got %v", routes)
+		t.Fatalf("want exactly 1 default route, got %v", routes)
 	}
 	if routes[0].iface != "wan0" || routes[0].metric != 0x400 {
 		t.Fatalf("got %+v, want {wan0 1024}", routes[0])

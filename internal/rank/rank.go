@@ -1,6 +1,7 @@
-// Package rank picks the hourly DNS winner from response-time samples.
-// Winner = lowest hourly median; p95 breaks near-ties. A hysteresis margin
-// guards against flapping between servers whose medians are close.
+// Package rank picks the hourly DNS candidate from response-time samples.
+// The candidate has the lowest hourly median; p95 breaks near-ties. A
+// hysteresis margin guards against flapping between servers whose medians
+// are close.
 package rank
 
 import "sort"
@@ -59,20 +60,20 @@ func Summarize(samples map[string][]float64) map[string]Stats {
 	return out
 }
 
-// Decide picks the hourly winner and reports whether the daemon should
-// switch the primary away from incumbent.
+// Decide picks the hourly candidate and reports whether the daemon should
+// switch away from the incumbent.
 //
 //   - Servers with zero successful samples are excluded. If none are
 //     healthy, it returns ("", false).
-//   - Winner is the lowest median; medians within tieEpsilonMs fall back
-//     to lowest p95.
+//   - The candidate has the lowest median; medians within tieEpsilonMs fall
+//     back to lowest p95.
 //   - Exact ties (median and p95 equal) prefer the incumbent: there is no
 //     evidence to switch on. Ties among non-incumbents resolve to the
 //     lexicographically smallest server, so results are deterministic
 //     regardless of map iteration order.
-//   - A challenger only dethrones the incumbent if its median beats the
+//   - A candidate only takes over from the incumbent if its median beats the
 //     incumbent's by more than margin (fraction, e.g. 0.10). An incumbent
-//     with no healthy samples always loses to a healthy challenger.
+//     with no healthy samples always loses to a healthy candidate.
 //
 // Decide works on partial-hour data too, so the CLI can show a live
 // "probable candidate".

@@ -28,7 +28,7 @@ type Status struct {
 	Time              time.Time              `json:"time"`
 	Iface             string                 `json:"iface"`
 	Servers           []string               `json:"servers"`
-	Primary           string                 `json:"primary"`
+	Incumbent         string                 `json:"incumbent"`
 	DHCPConfirmed     map[string]bool        `json:"dhcp_confirmed,omitempty"`
 	Round             int                    `json:"round"`
 	RoundsPerHour     int                    `json:"rounds_per_hour"`

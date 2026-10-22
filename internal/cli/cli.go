@@ -68,13 +68,13 @@ func headerLine(st ipc.Status) string {
 
 func printStatus(st ipc.Status) {
 	fmt.Printf("%s\n", headerLine(st))
-	fmt.Printf("order:   %s\n", strings.Join(markPrimary(st), "  "))
+	fmt.Printf("order:   %s\n", strings.Join(markIncumbent(st), "  "))
 	for _, line := range tableLines(st) {
 		fmt.Println(line)
 	}
 	fmt.Printf("probable candidate: %s", nonempty(st.ProbableCandidate, "(none: all unhealthy)"))
 	if st.WouldSwitch {
-		fmt.Printf("  -> WOULD SWITCH from %s (margin beaten)\n", st.Primary)
+		fmt.Printf("  -> WOULD SWITCH from %s (margin beaten)\n", st.Incumbent)
 	} else {
 		fmt.Printf("  (no switch needed)\n")
 	}
@@ -153,11 +153,11 @@ func tableLines(st ipc.Status) []string {
 	return out
 }
 
-// markPrimary prefixes the primary server with "*".
-func markPrimary(st ipc.Status) []string {
+// markIncumbent prefixes the incumbent server with "*".
+func markIncumbent(st ipc.Status) []string {
 	out := make([]string, len(st.Servers))
 	for i, s := range st.Servers {
-		if s == st.Primary {
+		if s == st.Incumbent {
 			out[i] = "*" + s
 		} else {
 			out[i] = " " + s

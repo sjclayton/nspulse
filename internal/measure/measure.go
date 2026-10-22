@@ -56,6 +56,14 @@ func probe(server string, names []string, samples int, timeout time.Duration) Re
 	return res
 }
 
+// Probe sends one A query for name to server and reports whether a matching
+// reply arrived within timeout. Used to check a candidate is still
+// contactable right before switching to it.
+func Probe(server, name string, timeout time.Duration) error {
+	_, err := query(serverAddr(server), name, timeout)
+	return err
+}
+
 // serverAddr normalizes a server entry to host:port for dialing. Bare IPs
 // (v4 or v6) get port 53 via JoinHostPort, which handles IPv6 bracketing
 // ("2001:db8::1" -> "[2001:db8::1]:53"); host:port values pass through.

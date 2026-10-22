@@ -42,7 +42,7 @@ func TestDecideExactTiePrefersIncumbent(t *testing.T) {
 		"a": {5, 5, 5, 5},
 		"b": {5, 5, 5, 5},
 	}
-	// Regardless of map iteration order, the incumbent must win an exact tie.
+	// Regardless of map iteration order, the incumbent must stay on an exact tie.
 	for i := 0; i < 50; i++ {
 		c, sw := Decide(samples, "b", 0.0)
 		if c != "b" || sw {
@@ -89,7 +89,7 @@ func TestDecideDownIncumbentLoses(t *testing.T) {
 	}
 }
 
-func TestDecideAlreadyPrimaryIsNoop(t *testing.T) {
+func TestDecideAlreadyIncumbentIsNoop(t *testing.T) {
 	samples := map[string][]float64{
 		"a": {1, 1, 1},
 		"b": {99, 99, 99},

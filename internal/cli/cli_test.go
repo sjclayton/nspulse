@@ -52,9 +52,9 @@ func fieldSpans(s string) [][2]int {
 // servers, multi-digit counts, and a "down" last-round value.
 func TestTableAlignment(t *testing.T) {
 	st := ipc.Status{
-		Iface:   "eno1",
-		Servers: []string{"2001:4860:4860::8888", "192.168.1.20"},
-		Primary: "2001:4860:4860::8888",
+		Iface:     "eno1",
+		Servers:   []string{"2001:4860:4860::8888", "192.168.1.20"},
+		Incumbent: "2001:4860:4860::8888",
 		DHCPConfirmed: map[string]bool{
 			"2001:4860:4860::8888": true,
 			"192.168.1.20":         true,

@@ -17,7 +17,7 @@ import (
 	"strings"
 )
 
-// defRoute is one default-route candidate from either address family.
+// defRoute is one default route from either address family.
 type defRoute struct {
 	iface  string
 	metric int64
@@ -41,7 +41,7 @@ func DefaultIface() (string, error) {
 	return pickDefault(routes)
 }
 
-// parseV4Routes extracts default-route candidates from /proc/net/route content.
+// parseV4Routes extracts default routes from /proc/net/route content.
 func parseV4Routes(r io.Reader) []defRoute {
 	var out []defRoute
 	sc := bufio.NewScanner(r)
@@ -60,7 +60,7 @@ func parseV4Routes(r io.Reader) []defRoute {
 	return out
 }
 
-// parseV6Routes extracts default-route candidates from /proc/net/ipv6_route
+// parseV6Routes extracts default routes from /proc/net/ipv6_route
 // content. Columns: dest(32 hex) plen src src_plen nexthop metric refcnt
 // use flags iface. A default route has an all-zero dest with prefix length
 // 00. Metric 0xffffffff means "no metric" (e.g. lo) and is skipped.
@@ -84,7 +84,7 @@ func parseV6Routes(s string) []defRoute {
 }
 
 // pickDefault returns the lowest-metric non-loopback interface, comparing
-// IPv4 and IPv6 candidates on equal footing.
+// IPv4 and IPv6 routes on equal footing.
 func pickDefault(routes []defRoute) (string, error) {
 	best, bestMetric := "", int64(0)
 	for _, r := range routes {
