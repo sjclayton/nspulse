@@ -19,6 +19,9 @@ go.work
 *.swp
 *~
 
+# Tools
+.tokeignore
+
 # macOS
 .DS_Store
 
