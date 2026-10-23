@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sjclayton/nspulse/internal/discover"
+	"github.com/sjclayton/nspulse/internal/execpath"
 )
 
 // How long to wait for resolved to adopt the narrowed, candidate-only list
@@ -71,8 +72,12 @@ func SetOrder(iface string, servers []string, candidate string) error {
 }
 
 func set(iface string, servers ...string) error {
+	path, err := execpath.Lookup("resolvectl")
+	if err != nil {
+		return err
+	}
 	args := append([]string{"dns", iface}, servers...)
-	out, err := exec.Command("resolvectl", args...).CombinedOutput()
+	out, err := exec.Command(path, args...).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("resolvectl %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 	}

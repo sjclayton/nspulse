@@ -10,6 +10,7 @@ package measure
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net"
 	"strings"
@@ -76,9 +77,10 @@ func serverAddr(server string) string {
 }
 
 // query sends one A query for name to addr and returns the RTT in
-// milliseconds. Any UDP reply with a matching ID and the QR bit set counts
-// as success, including NXDOMAIN/SERVFAIL: the server answered, so it is up
-// and its response time is what we are measuring.
+// milliseconds. A reply with a matching ID and the QR bit set counts as
+// success only when it carries a usable RCODE: NOERROR or NXDOMAIN. Error
+// replies such as SERVFAIL and REFUSED are treated as failures, otherwise a
+// server that fails fast would rank as the fastest and be promoted.
 func query(addr, name string, timeout time.Duration) (float64, error) {
 	id := uint16(rand.Intn(65536))
 	req, err := buildQuery(id, name)
@@ -102,6 +104,9 @@ func query(addr, name string, timeout time.Duration) (float64, error) {
 			return 0, err
 		}
 		if n >= 4 && binary.BigEndian.Uint16(buf[0:2]) == id && buf[2]&0x80 != 0 {
+			if rcode := buf[3] & 0x0f; rcode != 0 && rcode != 3 {
+				return 0, fmt.Errorf("DNS rcode %d", rcode)
+			}
 			return float64(time.Since(start).Microseconds()) / 1000.0, nil
 		}
 		// Stray packet (not our ID): keep reading until the deadline.

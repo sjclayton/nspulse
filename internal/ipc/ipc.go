@@ -5,9 +5,19 @@ package ipc
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"time"
+)
+
+const (
+	// maxStatusSize bounds how much a client will decode, so a replaced or
+	// hostile socket cannot exhaust memory. A real snapshot is a few KB.
+	maxStatusSize = 1 << 20
+	// fetchTimeout bounds the whole fetch, so a stuck server cannot hang
+	// status/watch forever.
+	fetchTimeout = 5 * time.Second
 )
 
 // ServerStats is the current-hour measurement summary for one DNS server.
@@ -72,7 +82,10 @@ func Fetch(path string) (Status, error) {
 		return st, fmt.Errorf("dial %s: %w (is the daemon running?)", path, err)
 	}
 	defer c.Close()
-	if err := json.NewDecoder(c).Decode(&st); err != nil {
+	if err := c.SetDeadline(time.Now().Add(fetchTimeout)); err != nil {
+		return st, fmt.Errorf("set fetch deadline: %w", err)
+	}
+	if err := json.NewDecoder(io.LimitReader(c, maxStatusSize)).Decode(&st); err != nil {
 		return st, fmt.Errorf("decode status: %w", err)
 	}
 	return st, nil

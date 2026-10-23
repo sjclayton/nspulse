@@ -8,7 +8,18 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/sjclayton/nspulse/internal/execpath"
 )
+
+// useSearchDir makes dir the first fixed helper directory for this test and
+// restores the search list afterwards, so stubs are found without PATH.
+func useSearchDir(t *testing.T, dir string) {
+	t.Helper()
+	old := execpath.SearchDirs
+	execpath.SearchDirs = append([]string{dir}, old...)
+	t.Cleanup(func() { execpath.SearchDirs = old })
+}
 
 // Regression: the incumbent is Current DNS Server, not list position 0.
 func TestParseLinkStatusIncumbentIsCurrentServer(t *testing.T) {
@@ -203,7 +214,7 @@ esac
 	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	got, err := fromNMCLI("eno1")
 	if err != nil {
 		t.Fatal(err)
@@ -278,7 +289,7 @@ func stubNmcli(t *testing.T, lines ...string) {
 	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 }
 
 func stubNmcliFailing(t *testing.T) {
@@ -287,7 +298,7 @@ func stubNmcliFailing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 }
 
 func setNetworkdLeaseDir(t *testing.T, dir string) {
@@ -412,5 +423,37 @@ func TestFromDHClientLeasesUsesMatchingBlock(t *testing.T) {
 
 	if _, err := fromDHClientLeases("enoX"); err == nil {
 		t.Fatal("want error when no block matches the interface")
+	}
+}
+
+// Options outside a matching interface block must be ignored, including any
+// block that omits its own interface line.
+func TestFromDHClientLeasesIgnoresOutsideOptions(t *testing.T) {
+	dir := t.TempDir()
+	body := "option domain-name-servers 203.0.113.1;\n" +
+		dhclientLease("lo", "10.0.0.3") +
+		"lease {\n  option domain-name-servers 203.0.113.2;\n}\n"
+	writeDHClientLease(t, dir, "dhclient.leases", body)
+	setDHClientGlobs(t, filepath.Join(dir, "*.leases"))
+
+	got, err := fromDHClientLeases("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"10.0.0.3"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+// Interface matching is exact, not a substring: a block for "lo0" must not
+// satisfy a request for "lo".
+func TestFromDHClientLeasesExactIfaceMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeDHClientLease(t, dir, "dhclient.leases", dhclientLease("lo0", "10.0.0.4"))
+	setDHClientGlobs(t, filepath.Join(dir, "*.leases"))
+
+	if _, err := fromDHClientLeases("lo"); err == nil {
+		t.Fatal("substring interface match contributed servers")
 	}
 }

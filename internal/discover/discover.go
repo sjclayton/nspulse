@@ -14,6 +14,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/sjclayton/nspulse/internal/execpath"
 )
 
 // defRoute is one default route from either address family.
@@ -112,7 +114,11 @@ type LinkDNS struct {
 // server actually handling queries, which can differ from Servers[0]
 // (e.g. after a failure or an external reorder).
 func LinkStatus(iface string) (LinkDNS, error) {
-	out, err := exec.Command("resolvectl", "--no-pager", "status", iface).Output()
+	path, err := execpath.Lookup("resolvectl")
+	if err != nil {
+		return LinkDNS{}, err
+	}
+	out, err := exec.Command(path, "--no-pager", "status", iface).Output()
 	if err != nil {
 		return LinkDNS{}, fmt.Errorf("resolvectl status %s: %w", iface, err)
 	}
@@ -211,7 +217,11 @@ func DHCPServers(iface string) ([]string, error) {
 // ":" inside values by default, which would turn an IPv6 server into
 // "2001\:db8\:\:1"; -e no keeps the addresses parseable.
 func fromNMCLI(iface string) ([]string, error) {
-	out, err := exec.Command("nmcli", "-t", "-e", "no", "dev", "show", iface).Output()
+	path, err := execpath.Lookup("nmcli")
+	if err != nil {
+		return nil, err
+	}
+	out, err := exec.Command(path, "-t", "-e", "no", "dev", "show", iface).Output()
 	if err != nil {
 		return nil, err
 	}
@@ -273,20 +283,23 @@ func fromDHClientLeases(iface string) ([]string, error) {
 			if err != nil {
 				continue
 			}
-			if !strings.Contains(string(data), iface) {
-				continue
-			}
+			// Track only the current lease block. Options are accepted only
+			// inside a block whose interface line names iface exactly, so a
+			// substring match or an option before the first interface line
+			// cannot contribute another interface's servers.
 			current := ""
-			sawIface := false
 			for _, line := range strings.Split(string(data), "\n") {
 				line = strings.TrimSpace(line)
+				if line == "lease {" {
+					current = ""
+					continue
+				}
 				if rest, ok := strings.CutPrefix(line, "interface "); ok {
 					current = strings.Trim(strings.TrimSpace(rest), `";`)
-					sawIface = true
 					continue
 				}
 				if rest, ok := strings.CutPrefix(line, "option domain-name-servers"); ok {
-					if sawIface && current != iface {
+					if current != iface {
 						continue
 					}
 					rest = strings.Trim(strings.TrimSpace(rest), ";")

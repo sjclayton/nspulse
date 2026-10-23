@@ -160,3 +160,46 @@ func TestBuildQueryShape(t *testing.T) {
 		t.Fatal("name normalization mismatch")
 	}
 }
+
+// startTestServerRcode serves replies with the given RCODE on 127.0.0.1:0.
+func startTestServerRcode(t *testing.T, rcode byte) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, addr, err := pc.ReadFrom(buf)
+			if err != nil || n < 2 {
+				return
+			}
+			resp := []byte{buf[0], buf[1], 0x81, 0x80 | (rcode & 0x0f), 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+			_, _ = pc.WriteTo(resp, addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// SERVFAIL/REFUSED and the other error RCODEs must not become samples,
+// otherwise a fast-failing server would outrank a working one.
+func TestRoundErrorRcodesAreFailures(t *testing.T) {
+	for _, rcode := range []byte{1, 2, 4, 5} { // FORMERR, SERVFAIL, NOTIMP, REFUSED
+		addr := startTestServerRcode(t, rcode)
+		res := Round([]string{addr}, []string{"google.com"}, 2, time.Second)
+		if len(res) != 1 || len(res[0].Samples) != 0 {
+			t.Fatalf("rcode %d: want 0 samples, got %+v", rcode, res)
+		}
+	}
+}
+
+// NXDOMAIN still proves the server answered and stays a usable sample.
+func TestRoundNXDOMAINIsUsable(t *testing.T) {
+	addr := startTestServerRcode(t, 3)
+	res := Round([]string{addr}, []string{"google.com"}, 2, time.Second)
+	if len(res) != 1 || len(res[0].Samples) != 2 {
+		t.Fatalf("want 2 NXDOMAIN samples, got %+v", res)
+	}
+}

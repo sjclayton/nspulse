@@ -1,6 +1,8 @@
 package ipc
 
 import (
+	"bytes"
+	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -59,5 +61,26 @@ func TestServeFetchRoundTrip(t *testing.T) {
 func TestFetchMissingSocket(t *testing.T) {
 	if _, err := Fetch(filepath.Join(t.TempDir(), "missing.sock")); err == nil {
 		t.Fatal("want error for missing socket")
+	}
+}
+
+// A hostile or replaced socket must not be able to exhaust the client.
+func TestFetchRejectsOversizedStatus(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "big.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		_, _ = c.Write(bytes.Repeat([]byte(" "), maxStatusSize+1))
+	}()
+	if _, err := Fetch(path); err == nil {
+		t.Fatal("want error for oversized status payload")
 	}
 }

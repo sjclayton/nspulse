@@ -10,7 +10,17 @@ import (
 	"time"
 
 	"github.com/sjclayton/nspulse/internal/discover"
+	"github.com/sjclayton/nspulse/internal/execpath"
 )
+
+// useSearchDir makes dir the first fixed helper directory for this test and
+// restores the search list afterwards, so stubs are found without PATH.
+func useSearchDir(t *testing.T, dir string) {
+	t.Helper()
+	old := execpath.SearchDirs
+	execpath.SearchDirs = append([]string{dir}, old...)
+	t.Cleanup(func() { execpath.SearchDirs = old })
+}
 
 func TestIncumbentOfPrefersInUseServer(t *testing.T) {
 	ordered := []string{"192.168.1.10", "192.168.1.20"}
@@ -181,7 +191,7 @@ func stubResolvectl(t *testing.T, current string, servers ...string) string {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	return logPath
 }
 
@@ -197,7 +207,7 @@ func stubNmcli(t *testing.T, servers ...string) {
 	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 }
 
 // stubNmcliFailing makes DHCP discovery fall through to networkd/dhclient.
@@ -207,7 +217,7 @@ func stubNmcliFailing(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "nmcli"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 }
 
 func readCalls(t *testing.T, path string) []string {
@@ -392,7 +402,7 @@ func stubResolvectlDNSError(t *testing.T, current string) string {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	return logPath
 }
 

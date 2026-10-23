@@ -6,7 +6,18 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sjclayton/nspulse/internal/execpath"
 )
+
+// useSearchDir makes dir the first fixed helper directory for this test and
+// restores the search list afterwards, so the stub is found without PATH.
+func useSearchDir(t *testing.T, dir string) {
+	t.Helper()
+	old := execpath.SearchDirs
+	execpath.SearchDirs = append([]string{dir}, old...)
+	t.Cleanup(func() { execpath.SearchDirs = old })
+}
 
 // stub puts a fake resolvectl on PATH that records each invocation. When
 // current is non-empty, status calls report it as Current DNS Server.
@@ -23,7 +34,7 @@ func stub(t *testing.T, current string) string {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	oldLimit, oldPoll := adoptLimit, adoptPoll
 	adoptLimit, adoptPoll = 0, 0
 	t.Cleanup(func() { adoptLimit, adoptPoll = oldLimit, oldPoll })
@@ -105,7 +116,7 @@ func TestSetOrderRetriesFailedRestore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	oldLimit, oldPoll := adoptLimit, adoptPoll
 	adoptLimit, adoptPoll = time.Second, time.Millisecond
 	t.Cleanup(func() { adoptLimit, adoptPoll = oldLimit, oldPoll })
@@ -146,7 +157,7 @@ func TestSetOrderNarrowFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 
 	if err := SetOrder("eno1", []string{"10.0.0.1", "10.0.0.2"}, "10.0.0.2"); err == nil {
 		t.Fatal("want error when the narrowing call fails")
@@ -178,7 +189,7 @@ func TestSetOrderDoubleRestoreFailure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "resolvectl"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	useSearchDir(t, dir)
 	oldLimit, oldPoll := adoptLimit, adoptPoll
 	adoptLimit, adoptPoll = time.Second, time.Millisecond
 	t.Cleanup(func() { adoptLimit, adoptPoll = oldLimit, oldPoll })
